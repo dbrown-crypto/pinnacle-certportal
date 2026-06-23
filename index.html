@@ -1,228 +1,289 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Pinnacle — Certificate Admin</title>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Raleway:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pinnacle Risk Advisors — Certificates</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Raleway:wght@400;500;600;700&family=Cormorant+Garamond:ital@1&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
-  :root{--navy:#11243F;--navy-deep:#0E1E36;--gold:#C9A94E;--gold-dark:#A1832F;
-    --cream:#FBF8F1;--cream-2:#F5F0E4;--ink:#15263F;--slate:#3F4754;--line:#e3dcc9;
-    --ok:#2f7d52;--warn:#9a6b16;--stop:#9a3434}
+  :root{
+    --navy:#11243F; --navy-deep:#0E1E36; --gold:#C9A94E; --gold-dark:#A1832F;
+    --cream:#FBF8F1; --cream-2:#F5F0E4; --ink:#15263F; --slate:#3F4754;
+    --line:rgba(161,131,47,.35); --ok:#2f7d52; --warn:#9a6b16; --stop:#9a3434;
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:Raleway,system-ui,sans-serif;color:var(--ink);background:var(--cream-2)}
-  header{background:var(--navy);color:var(--cream);padding:14px 22px;display:flex;align-items:center;justify-content:space-between}
-  header h1{font-family:"Playfair Display",serif;font-size:18px;margin:0}
-  header .who{font-size:12px;color:rgba(251,248,241,.7)}
-  .link{background:none;border:0;color:var(--gold);cursor:pointer;font:inherit;text-decoration:underline}
-  .wrap{max-width:1000px;margin:0 auto;padding:22px 18px 60px}
-  .tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
-  .tab{padding:9px 16px;border:1px solid var(--line);background:#fff;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px}
-  .tab.active{background:var(--navy);color:var(--cream);border-color:var(--navy)}
-  .panel{display:none}.panel.show{display:block}
-  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:12px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:top}
-  th{color:var(--slate);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
-  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
-  .pill.active{background:#e7f1ea;color:var(--ok)}.pill.off{background:#f1e7e7;color:var(--stop)}
-  .pill.open{background:#fbf3e2;color:var(--warn)}.pill.sent{background:#e7f1ea;color:var(--ok)}
-  .pill.block{background:#f1e7e7;color:var(--stop)}.pill.route_to_agent{background:#fbf3e2;color:var(--warn)}
-  .pill.auto_issue{background:#e7f1ea;color:var(--ok)}
-  button.act{border:0;border-radius:7px;padding:7px 12px;font:inherit;font-weight:600;font-size:12px;cursor:pointer;margin:2px}
-  .b-navy{background:var(--navy);color:var(--cream)}.b-gold{background:var(--gold);color:var(--navy)}
-  .b-stop{background:#f1e7e7;color:var(--stop)}.b-ghost{background:#fff;border:1px solid var(--line)!important;color:var(--slate)}
-  label{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--slate);display:block;margin:8px 0 4px}
-  input,textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:inherit;background:var(--cream)}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  @media(max-width:640px){.grid{grid-template-columns:1fr}}
-  .login{max-width:360px;margin:60px auto;background:#fff;border-radius:12px;padding:26px;box-shadow:0 14px 40px rgba(0,0,0,.18)}
-  .login h2{font-family:"Playfair Display",serif;margin:0 0 14px}
-  .hidden{display:none}.muted{color:var(--slate);font-size:12px}
-  .err{color:var(--stop);font-size:13px;margin-top:8px}
+  body{margin:0;font-family:"Raleway",system-ui,sans-serif;color:var(--ink);
+    background:var(--navy);min-height:100vh}
+  /* ambient road-at-dusk wash, kept abstract so it never fights the content */
+  body::before{content:"";position:fixed;inset:0;z-index:0;
+    background:radial-gradient(120% 80% at 50% -10%,#223a5e 0%,var(--navy) 45%,var(--navy-deep) 100%)}
+  .wrap{position:relative;z-index:1;max-width:880px;margin:0 auto;padding:32px 20px 64px}
+  .monogram{width:40px;height:40px;display:grid;place-items:center}
+  .monogram svg{width:40px;height:40px}
+  .brand{display:flex;align-items:center;gap:14px;color:var(--cream);margin-bottom:28px}
+  .brand h1{font-family:"Playfair Display",serif;font-size:20px;font-weight:700;margin:0;letter-spacing:.3px}
+  .brand small{display:block;color:var(--gold);font-size:11px;letter-spacing:2px;text-transform:uppercase;margin-top:2px}
+  .card{background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);overflow:hidden}
+  .card-head{background:var(--navy);color:var(--cream);padding:18px 24px}
+  .card-head h2{font-family:"Playfair Display",serif;margin:0;font-size:18px;font-weight:600}
+  .card-head .accent{font-family:"Cormorant Garamond",serif;font-style:italic;color:var(--gold);font-size:15px}
+  .card-body{padding:24px}
+  label{display:block;font-size:12px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--slate);margin:14px 0 6px}
+  input,textarea{width:100%;padding:11px 13px;border:1px solid #d8d2c4;border-radius:8px;font:inherit;color:var(--ink);background:var(--cream)}
+  input:focus,textarea:focus{outline:2px solid var(--gold);border-color:var(--gold);background:#fff}
+  textarea{min-height:64px;resize:vertical}
+  .btn{appearance:none;border:0;border-radius:8px;font:inherit;font-weight:700;letter-spacing:.3px;
+    padding:13px 18px;cursor:pointer;width:100%;margin-top:18px}
+  .btn-primary{background:var(--navy);color:var(--cream)}
+  .btn-primary:hover{background:var(--navy-deep)}
+  .btn-gold{background:var(--gold);color:var(--navy);}
+  .btn-gold:hover{background:var(--gold-dark);color:#fff}
+  .btn-ghost{background:transparent;color:var(--slate);border:1px solid #d8d2c4;width:auto;padding:9px 14px;margin:0}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:560px){.row{grid-template-columns:1fr}}
+  .policy{border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:14px;background:var(--cream)}
+  .policy h3{font-family:"Playfair Display",serif;margin:0 0 4px;font-size:16px;color:var(--navy)}
+  .pill{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+    padding:3px 9px;border-radius:20px}
+  .pill.active{background:#e7f1ea;color:var(--ok)}
+  .pill.inactive{background:#f1e7e7;color:var(--stop)}
+  .cov{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px;color:var(--slate)}
+  .cov b{color:var(--ink)}
+  .toggle-wrap{display:flex;align-items:flex-start;gap:10px;margin-top:18px;padding:14px;border:1px dashed var(--line);border-radius:8px;background:var(--cream-2)}
+  .toggle-wrap input{width:auto;margin-top:3px}
+  .toggle-wrap .t-label{font-size:13px;color:var(--ink)}
+  .toggle-wrap .t-label span{display:block;color:var(--slate);font-size:12px;margin-top:2px}
+  .special{margin-top:14px;display:none}
+  .special.show{display:block}
+  .chk{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:13px}
+  .chk input{width:auto}
+  .msg{padding:14px 16px;border-radius:8px;font-size:14px;margin-top:18px;line-height:1.5;display:none}
+  .msg.show{display:block}
+  .msg.ok{background:#e7f1ea;color:#1f5236;border:1px solid #bcd8c6}
+  .msg.routed{background:#fbf3e2;color:#7a571a;border:1px solid #e6d3a6}
+  .msg.err{background:#f6e9e9;color:#7c2b2b;border:1px solid #e3c3c3}
+  .foot{color:rgba(251,248,241,.55);font-size:12px;text-align:center;margin-top:24px;line-height:1.6}
+  .link{background:none;border:0;color:var(--gold);font:inherit;cursor:pointer;text-decoration:underline;padding:0}
+  .hidden{display:none}
+  .disclaimer{font-family:"Cormorant Garamond",serif;font-style:italic;color:var(--slate);font-size:14px;margin-top:16px}
 </style>
 </head>
 <body>
-
-<div id="loginView" class="login">
-  <h2>Certificate Admin</h2>
-  <label>Email</label><input id="aEmail" type="email"/>
-  <label>Password</label><input id="aPass" type="password"/>
-  <button class="act b-navy" style="margin-top:14px;width:100%" id="aLogin">Sign in</button>
-  <div id="aErr" class="err"></div>
-</div>
-
-<div id="appView" class="hidden">
-  <header>
-    <h1>Pinnacle — Certificate Admin</h1>
-    <div><span class="who" id="aWho"></span> · <button class="link" id="aLogout">Sign out</button></div>
-  </header>
-  <div class="wrap">
-    <div class="tabs">
-      <div class="tab active" data-p="policies">Policies</div>
-      <div class="tab" data-p="queue">Special Requests <span id="queueCount"></span></div>
-      <div class="tab" data-p="certs">Issued Certificates</div>
-      <div class="tab" data-p="audit">Audit Log</div>
+<div class="wrap">
+  <div class="brand">
+    <span class="monogram">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <polygon points="20,3 37,20 20,37 3,20" fill="none" stroke="#C9A94E" stroke-width="1.6"/>
+        <text x="20" y="26" text-anchor="middle" font-family="Playfair Display, serif" font-size="18" font-weight="700" fill="#C9A94E">P</text>
+      </svg>
+    </span>
+    <div>
+      <h1>Pinnacle Risk Advisors</h1>
+      <small>Self-Serve Certificates</small>
     </div>
+  </div>
 
-    <!-- POLICIES -->
-    <div class="panel show" id="p-policies">
-      <div class="card">
-        <strong>Add / edit a policy</strong>
-        <div class="muted">Keyed by hand — this is the source of truth the portal reads. Keep <em>data current as of</em> honest.</div>
-        <div class="grid" style="margin-top:10px">
-          <div><label>Client ID (auth user id)</label><input id="f_client"/></div>
-          <div><label>Named insured</label><input id="f_insured"/></div>
-          <div><label>USDOT</label><input id="f_dot"/></div>
-          <div><label>Status</label><input id="f_status" value="active" placeholder="active / cancelled / pending"/></div>
-          <div><label>Effective date</label><input id="f_eff" type="date"/></div>
-          <div><label>Expiration date</label><input id="f_exp" type="date"/></div>
-          <div><label>Insured address</label><input id="f_addr"/></div>
-          <div><label>Data current as of</label><input id="f_asof" type="date"/></div>
-        </div>
-        <label>Producer block (prints on cert)</label><textarea id="f_producer">Pinnacle Risk Advisors LLC
-2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339
-(943) 239-3439  dbrown@pinnacleriskad.com</textarea>
-        <label>Coverages (JSON: line → limit)</label><input id="f_cov" value='{"auto_liability":1000000,"cargo":100000}'/>
-        <label>Carriers (JSON array for cert table)</label><textarea id="f_carriers">[{"line":"Auto Liability","carrier":"Progressive Mountain","policy_number":"","eff":"","exp":"","limits":{"CSL":1000000}}]</textarea>
-        <input id="f_id" type="hidden"/>
-        <button class="act b-gold" id="savePolicy" style="margin-top:10px">Save policy</button>
-        <button class="act b-ghost" id="clearForm">Clear</button>
-        <div id="polErr" class="err"></div>
+  <!-- LOGIN -->
+  <div id="loginView" class="card">
+    <div class="card-head"><h2>Sign in</h2><div class="accent">Manage your certificates of insurance</div></div>
+    <div class="card-body">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="email" placeholder="you@example.com" />
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" />
+      <button class="btn btn-primary" id="loginBtn">Sign in</button>
+      <div id="loginMsg" class="msg err"></div>
+    </div>
+  </div>
+
+  <!-- PORTAL -->
+  <div id="portalView" class="hidden">
+    <div id="policyList"></div>
+
+    <div id="certCard" class="card hidden">
+      <div class="card-head">
+        <h2>Add a certificate holder</h2>
+        <div class="accent" id="certForPolicy"></div>
       </div>
-      <div class="card"><table id="polTable"></table></div>
+      <div class="card-body">
+        <label for="holderName">Certificate holder name</label>
+        <input id="holderName" placeholder="e.g. Acme Logistics Brokerage" />
+        <label for="holderAddress">Holder address</label>
+        <input id="holderAddress" placeholder="Street, City, State ZIP" />
+        <div class="row">
+          <div>
+            <label for="holderEmail">Send certificate to (email)</label>
+            <input id="holderEmail" type="email" placeholder="certs@holder.com" />
+          </div>
+        </div>
+        <label for="ops">Description of operations (optional)</label>
+        <textarea id="ops" placeholder="e.g. Motor carrier hauling general freight."></textarea>
+
+        <div class="toggle-wrap">
+          <input id="needsSpecial" type="checkbox" />
+          <div class="t-label">
+            <label for="needsSpecial" style="margin:0;text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);font-weight:600">This holder requires special wording</label>
+            <span>Additional insured, waiver of subrogation, or specific contract language. We'll review these and send them from our office.</span>
+          </div>
+        </div>
+
+        <div id="specialBox" class="special">
+          <div class="chk"><input type="checkbox" value="additional_insured" class="sp"/> Additional Insured</div>
+          <div class="chk"><input type="checkbox" value="waiver_of_subrogation" class="sp"/> Waiver of Subrogation</div>
+          <div class="chk"><input type="checkbox" value="primary_non_contributory" class="sp"/> Primary &amp; Non-Contributory</div>
+          <div class="chk"><input type="checkbox" value="special_language" class="sp"/> Other specific wording</div>
+        </div>
+
+        <button class="btn btn-gold" id="issueBtn">Issue &amp; send certificate</button>
+        <button class="btn btn-ghost" id="cancelBtn" style="width:100%;margin-top:10px">Cancel</button>
+
+        <div id="resultMsg" class="msg"></div>
+        <p class="disclaimer">Certificates are issued as a matter of information only and confer no rights upon the holder.</p>
+      </div>
     </div>
 
-    <!-- QUEUE -->
-    <div class="panel" id="p-queue"><div class="card"><table id="queueTable"></table></div></div>
-    <!-- CERTS -->
-    <div class="panel" id="p-certs"><div class="card"><table id="certTable"></table></div></div>
-    <!-- AUDIT -->
-    <div class="panel" id="p-audit"><div class="card"><table id="auditTable"></table></div></div>
+    <div class="foot">
+      Signed in as <span id="whoami"></span> · <button class="link" id="logoutBtn">Sign out</button><br/>
+      Pinnacle Risk Advisors LLC · (943) 239-3439 · dbrown@pinnacleriskad.com
+    </div>
   </div>
 </div>
 
 <script>
-// ---- CONFIG ----
+// ---- CONFIG: fill these in ----
 const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";
 const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
-const BACKEND_URL = "https://YOUR-BACKEND-HOST";
-// ----------------
+const BACKEND_URL = "https://YOUR-BACKEND-HOST";   // FastAPI service base URL
+// --------------------------------
+
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const $ = id => document.getElementById(id);
-let token = null;
+let activePolicy = null;
 
-async function api(path, opts={}){
-  const r = await fetch(BACKEND_URL+path, {...opts,
-    headers:{"Content-Type":"application/json","Authorization":"Bearer "+token, ...(opts.headers||{})}});
-  if(!r.ok){ throw new Error((await r.json().catch(()=>({}))).detail || r.statusText); }
-  return r.json();
+const $ = (id) => document.getElementById(id);
+const show = (el) => el.classList.remove("hidden");
+const hide = (el) => el.classList.add("hidden");
+
+function showMsg(el, kind, text){
+  el.className = "msg show " + kind;
+  el.textContent = text;
 }
 
-$("aLogin").onclick = async ()=>{
-  const {data,error} = await sb.auth.signInWithPassword({email:$("aEmail").value.trim(),password:$("aPass").value});
-  if(error){ $("aErr").textContent="Sign-in failed."; return; }
-  token = data.session.access_token; await boot();
+// ---- auth ----
+$("loginBtn").onclick = async () => {
+  const { error } = await sb.auth.signInWithPassword({
+    email: $("email").value.trim(), password: $("password").value
+  });
+  if (error){ showMsg($("loginMsg"), "err", "We couldn't sign you in. Check your email and password."); return; }
+  await boot();
 };
-$("aLogout").onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
+$("logoutBtn").onclick = async () => { await sb.auth.signOut(); location.reload(); };
 
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("show"));
-  t.classList.add("active"); $("p-"+t.dataset.p).classList.add("show");
-  if(t.dataset.p==="queue") loadQueue();
-  if(t.dataset.p==="certs") loadCerts();
-  if(t.dataset.p==="audit") loadAudit();
-});
-
+// ---- load policies (RLS scopes to this client only) ----
 async function boot(){
-  const {data:{user}} = await sb.auth.getUser();
-  if(!user){ return; }
-  $("aWho").textContent = user.email;
-  $("loginView").classList.add("hidden"); $("appView").classList.remove("hidden");
-  try{ await loadPolicies(); await loadQueue(); }
-  catch(e){ $("polErr").textContent = "You're signed in but not on the admin allowlist. Add your user id to ADMIN_USER_IDS."; }
+  const { data:{ user } } = await sb.auth.getUser();
+  if (!user){ hide($("portalView")); show($("loginView")); return; }
+  $("whoami").textContent = user.email;
+  hide($("loginView")); show($("portalView"));
+
+  const { data: policies, error } = await sb.from("policies").select("*").order("named_insured");
+  const list = $("policyList");
+  if (error || !policies || policies.length === 0){
+    list.innerHTML = `<div class="card"><div class="card-body">No policies are linked to your account yet. Please contact our office at (943) 239-3439.</div></div>`;
+    return;
+  }
+  list.innerHTML = "";
+  policies.forEach((p) => {
+    const today = new Date().toISOString().slice(0,10);
+    const liveActive = p.status === "active" && p.effective_date <= today && p.expiration_date >= today && p.self_serve_enabled;
+    const cov = Object.entries(p.coverages || {}).map(([k,v]) =>
+      `<span><b>${k.replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())}</b> $${Number(v).toLocaleString()}</span>`).join("");
+    const el = document.createElement("div");
+    el.className = "policy";
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <h3>${p.named_insured}</h3>
+        <span class="pill ${liveActive?'active':'inactive'}">${liveActive?'Active':'Unavailable'}</span>
+      </div>
+      <div style="font-size:12px;color:var(--slate)">${p.usdot?('USDOT '+p.usdot+' · '):''}Term ${p.effective_date} → ${p.expiration_date}</div>
+      <div class="cov">${cov||'<span>Coverage details on file with our office.</span>'}</div>
+      <button class="btn btn-primary" style="margin-top:14px" ${liveActive?'':'disabled style=\"opacity:.5;margin-top:14px\"'} data-id="${p.id}">Add certificate holder</button>`;
+    const btn = el.querySelector("button");
+    if (liveActive) btn.onclick = () => openCertForm(p);
+    list.appendChild(el);
+  });
 }
 
-function esc(s){return (s??"").toString().replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
-
-async function loadPolicies(){
-  const rows = await api("/admin/policies");
-  $("polTable").innerHTML = "<tr><th>Insured</th><th>DOT</th><th>Term</th><th>Status</th><th>Self-serve</th><th>As of</th><th></th></tr>" +
-    rows.map(p=>`<tr>
-      <td><strong>${esc(p.named_insured)}</strong></td>
-      <td>${esc(p.usdot||"—")}</td>
-      <td>${p.effective_date}→${p.expiration_date}</td>
-      <td><span class="pill ${p.status==='active'?'active':'off'}">${p.status}</span></td>
-      <td><span class="pill ${p.self_serve_enabled?'active':'off'}">${p.self_serve_enabled?'On':'Off'}</span></td>
-      <td>${p.data_current_as_of}</td>
-      <td>
-        <button class="act b-ghost" onclick='editPolicy(${JSON.stringify(p)})'>Edit</button>
-        <button class="act ${p.self_serve_enabled?'b-stop':'b-gold'}" onclick="toggleServe('${p.id}',${!p.self_serve_enabled})">${p.self_serve_enabled?'Kill switch':'Re-enable'}</button>
-        ${p.status==='active'?`<button class="act b-stop" onclick="setStatus('${p.id}','cancelled')">Mark cancelled</button>`:`<button class="act b-gold" onclick="setStatus('${p.id}','active')">Mark active</button>`}
-      </td></tr>`).join("");
+function openCertForm(p){
+  activePolicy = p;
+  $("certForPolicy").textContent = "For " + p.named_insured;
+  ["holderName","holderAddress","holderEmail","ops"].forEach(id=>$(id).value="");
+  $("needsSpecial").checked = false; $("specialBox").classList.remove("show");
+  document.querySelectorAll(".sp").forEach(c=>c.checked=false);
+  $("resultMsg").className = "msg";
+  show($("certCard"));
+  $("certCard").scrollIntoView({behavior:"smooth"});
 }
-window.editPolicy = (p)=>{
-  $("f_id").value=p.id; $("f_client").value=p.client_id; $("f_insured").value=p.named_insured;
-  $("f_dot").value=p.usdot||""; $("f_status").value=p.status; $("f_eff").value=p.effective_date;
-  $("f_exp").value=p.expiration_date; $("f_addr").value=p.insured_address; $("f_asof").value=p.data_current_as_of;
-  $("f_producer").value=p.producer_block; $("f_cov").value=JSON.stringify(p.coverages);
-  $("f_carriers").value=JSON.stringify(p.carriers,null,0); window.scrollTo({top:0,behavior:"smooth"});
-};
-$("clearForm").onclick=()=>{ ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value=""); };
-$("savePolicy").onclick = async ()=>{
-  $("polErr").textContent="";
+$("cancelBtn").onclick = () => hide($("certCard"));
+$("needsSpecial").onchange = (e) => $("specialBox").classList.toggle("show", e.target.checked);
+
+// ---- issue ----
+$("issueBtn").onclick = async () => {
+  if (!activePolicy) return;
+  const name = $("holderName").value.trim();
+  const addr = $("holderAddress").value.trim();
+  if (!name || !addr){ showMsg($("resultMsg"),"err","Please enter the holder's name and address."); return; }
+
+  const special = $("needsSpecial").checked
+    ? [...document.querySelectorAll(".sp:checked")].map(c=>c.value)
+    : [];
+  if ($("needsSpecial").checked && special.length === 0){
+    showMsg($("resultMsg"),"err","Select which special wording is required, or uncheck the box.");
+    return;
+  }
+
+  $("issueBtn").disabled = true; $("issueBtn").textContent = "Working…";
+  const { data:{ session } } = await sb.auth.getSession();
   try{
-    const body={ client_id:$("f_client").value.trim(), named_insured:$("f_insured").value.trim(),
-      usdot:$("f_dot").value.trim()||null, status:$("f_status").value.trim(),
-      effective_date:$("f_eff").value, expiration_date:$("f_exp").value,
-      producer_block:$("f_producer").value, insured_address:$("f_addr").value.trim(),
-      data_current_as_of:$("f_asof").value,
-      coverages:JSON.parse($("f_cov").value||"{}"), carriers:JSON.parse($("f_carriers").value||"[]") };
-    if($("f_id").value) body.id=$("f_id").value;
-    await api("/admin/policies",{method:"POST",body:JSON.stringify(body)});
-    $("clearForm").click(); await loadPolicies();
-  }catch(e){ $("polErr").textContent="Save failed: "+e.message; }
+    const res = await fetch(`${BACKEND_URL}/issue-certificate`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "Authorization":`Bearer ${session.access_token}` },
+      body: JSON.stringify({
+        policy_id: activePolicy.id, holder_name:name, holder_address:addr,
+        holder_email:$("holderEmail").value.trim() || null,
+        description_of_operations:$("ops").value.trim(),
+        requested_special_wording: special
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.status === "issued"){
+      showMsg($("resultMsg"),"ok",
+        `Certificate ${data.cert_number} issued${data.emailed_to?.length?` and emailed to ${data.emailed_to.join(", ")}`:""}. Your download will begin now.`);
+      downloadPdf(data.pdf_base64, data.cert_number);
+    } else if (res.ok && data.status === "routed"){
+      showMsg($("resultMsg"),"routed", data.message || "Sent to our office for review. We'll prepare and send this certificate shortly.");
+    } else {
+      const m = (data.detail && data.detail.message) || data.message || "We couldn't issue this certificate. Please contact our office.";
+      showMsg($("resultMsg"),"err", m);
+    }
+  } catch(err){
+    showMsg($("resultMsg"),"err","Something went wrong reaching our system. Please try again or call (943) 239-3439.");
+  } finally {
+    $("issueBtn").disabled = false; $("issueBtn").textContent = "Issue & send certificate";
+  }
 };
-window.toggleServe=async(id,on)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({self_serve_enabled:on})}); loadPolicies(); };
-window.setStatus=async(id,s)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadPolicies(); };
 
-async function loadQueue(){
-  const rows = await api("/admin/special-requests");
-  const open = rows.filter(r=>r.status==='open').length;
-  $("queueCount").textContent = open?`(${open})`:"";
-  $("queueTable").innerHTML = "<tr><th>When</th><th>Holder</th><th>Wording</th><th>Status</th><th></th></tr>" +
-    rows.map(r=>`<tr>
-      <td>${new Date(r.created_at).toLocaleString()}</td>
-      <td><strong>${esc(r.holder_name)}</strong><br><span class="muted">${esc(r.holder_address)}</span></td>
-      <td>${(r.requested_wording||[]).join(", ")}</td>
-      <td><span class="pill ${r.status==='open'?'open':'sent'}">${r.status}</span></td>
-      <td>${r.status==='open'?`<button class="act b-gold" onclick="reqStatus('${r.id}','sent')">Mark sent</button>
-           <button class="act b-ghost" onclick="reqStatus('${r.id}','in_progress')">In progress</button>`:''}</td>
-    </tr>`).join("") || "<tr><td class='muted'>No special-wording requests. Nothing waiting on you.</td></tr>";
-}
-window.reqStatus=async(id,s)=>{ await api(`/admin/special-requests/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadQueue(); };
-
-async function loadCerts(){
-  const rows = await api("/admin/certificates");
-  $("certTable").innerHTML = "<tr><th>Issued</th><th>Cert #</th><th>Holder</th><th>By</th></tr>" +
-    rows.map(r=>`<tr><td>${new Date(r.issued_at).toLocaleString()}</td><td>${esc(r.cert_number)}</td>
-      <td>${esc(r.holder_name)}</td><td>${esc(r.issued_by)}</td></tr>`).join("") ||
-      "<tr><td class='muted'>No certificates issued yet.</td></tr>";
-}
-async function loadAudit(){
-  const rows = await api("/admin/audit");
-  $("auditTable").innerHTML = "<tr><th>When</th><th>Route</th><th>Holder</th><th>Codes</th></tr>" +
-    rows.map(r=>`<tr><td>${new Date(r.occurred_at).toLocaleString()}</td>
-      <td><span class="pill ${r.action}">${r.action}</span></td>
-      <td>${esc(r.holder_name||"—")}</td>
-      <td class="muted">${(r.audit_codes||[]).join(", ")}</td></tr>`).join("") ||
-      "<tr><td class='muted'>No activity yet.</td></tr>";
+function downloadPdf(b64, certNo){
+  const bytes = Uint8Array.from(atob(b64), c=>c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], {type:"application/pdf"}));
+  const a = document.createElement("a"); a.href=url; a.download=`COI_${certNo}.pdf`; a.click();
+  URL.revokeObjectURL(url);
 }
 
-// keep session across refresh
-sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.access_token; boot(); }});
+sb.auth.onAuthStateChange((_e,_s)=>{});
+boot();
 </script>
 </body>
 </html>
