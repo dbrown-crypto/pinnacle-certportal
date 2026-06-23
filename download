@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+*.env
+!.env.example
+
+# Licensed / sensitive assets — keep out of git
+acord25*.pdf
+*signature*.png
+backend/sample_certificate.pdf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
