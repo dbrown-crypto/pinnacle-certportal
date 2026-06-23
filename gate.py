@@ -1,228 +1,156 @@
 """
-cert_generator.py — Pinnacle Risk Advisors self-serve certificate portal
+gate.py — Pinnacle Risk Advisors self-serve certificate portal
+The validation gate. This is the product.
 
-Turns an approved (gate-passed) request into a finished certificate PDF.
+A client-initiated certificate may ONLY be issued automatically when it is a
+plain, informational ACORD 25 against currently-bound, in-force coverage.
+Anything else routes to a human (Derrick). This module is the single source of
+truth for that decision. It is deliberately dependency-free so it can be unit
+tested in isolation and audited at a glance.
 
-Two modes:
-  1. PRODUCTION: fills your licensed ACORD 25 PDF template. Uses the
-     widget-flatten approach you already use elsewhere — fill the form fields,
-     then flatten so the values render reliably as static content on every
-     viewer (no dependence on the reader honoring AcroForm appearances).
-  2. FALLBACK (demo/dev): if no template is supplied, draws a clean,
-     Pinnacle-branded certificate so the pipeline is runnable end to end.
-     This is NOT the ACORD 25 and is watermarked SAMPLE. Never ship it to a
-     real holder — supply your licensed template in production.
-
-The authorized-rep signature is applied here, automatically, because by the
-time a request reaches this module the gate has already guaranteed it is a
-plain informational cert on verified-active, in-date coverage. The signature
-is only safe because the cert can only ever be the safe kind.
+NOTHING in the frontend is a security control. Hiding the "Additional Insured"
+checkbox is UX. THIS file is the control. The API must call evaluate_gate()
+server-side on every issuance request and refuse to generate a certificate
+unless it returns allow=True.
 """
 
 from __future__ import annotations
 
-import io
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum
 from typing import Optional
 
-import fitz  # PyMuPDF
+
+# --- Special-wording flags ----------------------------------------------------
+# If a holder's contract requires ANY of these, the certificate is no longer a
+# plain informational cert. It makes a representation about coverage behavior
+# that the gate cannot verify is actually endorsed onto the policy, so it must
+# go to a human. These are the flags the client form will surface as a single
+# "this holder requires special wording" path — never as auto-issuable options.
+class SpecialWording(str, Enum):
+    ADDITIONAL_INSURED = "additional_insured"
+    WAIVER_OF_SUBROGATION = "waiver_of_subrogation"
+    PRIMARY_NON_CONTRIBUTORY = "primary_non_contributory"
+    SPECIAL_LANGUAGE = "special_language"  # any free-text wording request
 
 
-# Pinnacle client-facing colorway (navy / gold / cream), from the approved
-# proposal palette.
-NAVY = (0x11 / 255, 0x24 / 255, 0x3F / 255)
-NAVY_DEEP = (0x0E / 255, 0x1E / 255, 0x36 / 255)
-GOLD = (0xC9 / 255, 0xA9 / 255, 0x4E / 255)
-GOLD_DARK = (0xA1 / 255, 0x83 / 255, 0x2F / 255)
-CREAM = (0xFB / 255, 0xF8 / 255, 0xF1 / 255)
-INK = (0x15 / 255, 0x26 / 255, 0x3F / 255)
-SLATE = (0x3F / 255, 0x47 / 255, 0x54 / 255)
+class PolicyStatus(str, Enum):
+    ACTIVE = "active"
+    CANCELLED = "cancelled"
+    PENDING = "pending"
+    EXPIRED = "expired"  # may be set explicitly; also derived from dates
+
+
+# Coverage lines that MUST carry a non-zero limit for a trucking COI to be
+# meaningful. A cert that shows blank Auto Liability is worse than no cert.
+REQUIRED_COVERAGE_LINES = ("auto_liability",)
 
 
 @dataclass
-class CertContent:
-    """Everything that prints on the certificate. The API builds this from the
-    stored policy snapshot + the holder the client entered."""
-    cert_number: str
-    issue_date: date
-    producer_block: str           # Pinnacle name / address / contact
-    insured_name: str
-    insured_address: str
+class PolicySnapshot:
+    """The policy row as stored in Supabase, passed in by the API after it has
+    loaded the record the authenticated client is actually entitled to (RLS
+    guarantees they can only load their own)."""
+    policy_id: str
+    named_insured: str
+    status: PolicyStatus
+    effective_date: date
+    expiration_date: date
+    self_serve_enabled: bool
+    coverages: dict[str, Optional[float]] = field(default_factory=dict)  # line -> limit
+    data_current_as_of: Optional[date] = None
+
+
+@dataclass
+class CertRequest:
+    """What the client submitted from the Add Certificate Holder form."""
     holder_name: str
     holder_address: str
-    description_of_operations: str
-    coverages: list[dict]         # [{line, carrier, policy_number, eff, exp, limits:{label:amount}}]
-    data_current_as_of: date
+    holder_email: Optional[str]
+    description_of_operations: str = ""
+    requested_special_wording: list[SpecialWording] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# PRODUCTION PATH: fill a licensed ACORD 25 template
-# ---------------------------------------------------------------------------
-def fill_acord25_template(
-    template_path: str,
-    field_map: dict[str, str],
-    signature_png_path: Optional[str] = None,
-    signature_rect: Optional[tuple[float, float, float, float]] = None,
-) -> bytes:
-    """Fill your licensed ACORD 25 AcroForm template and flatten it.
+@dataclass
+class GateResult:
+    allow: bool
+    route: str               # "auto_issue" | "route_to_agent" | "block"
+    reasons: list[str]       # human-readable, safe to show client and to log
+    audit_codes: list[str]   # machine codes for the audit trail
 
-    field_map maps the template's form-field names -> string values. Run the
-    one-time helper dump_field_names() below against your template to discover
-    the exact field names, then build field_map in the API.
 
-    signature_rect is (x0, y0, x1, y1) in PDF points for the Authorized
-    Representative box on your template.
+def evaluate_gate(
+    policy: PolicySnapshot,
+    request: CertRequest,
+    today: Optional[date] = None,
+) -> GateResult:
+    """Decide what happens to a certificate request. Pure function: no I/O.
+
+    Returns one of three routes:
+      - auto_issue       -> safe to generate, sign, send, log
+      - route_to_agent   -> create a request task for Derrick; issue NOTHING
+      - block            -> tell client to contact the agency; issue NOTHING
     """
-    doc = fitz.open(template_path)
-    for page in doc:
-        for widget in (page.widgets() or []):
-            if widget.field_name in field_map:
-                widget.field_value = str(field_map[widget.field_name])
-                widget.update()
+    today = today or date.today()
+    reasons: list[str] = []
+    audit: list[str] = []
 
-    # Apply signature before flattening so it becomes part of the page.
-    if signature_png_path and signature_rect:
-        page = doc[0]
-        page.insert_image(fitz.Rect(*signature_rect), filename=signature_png_path)
+    # 1. Special wording is a hard route-to-agent, checked first. Even on a
+    #    cancelled policy we route rather than block, so Derrick sees the intent.
+    if request.requested_special_wording:
+        names = ", ".join(w.value for w in request.requested_special_wording)
+        reasons.append(
+            "This certificate requires special wording "
+            f"({names}) and will be reviewed and sent by our office."
+        )
+        audit.append("ROUTE_SPECIAL_WORDING")
+        return GateResult(False, "route_to_agent", reasons, audit)
 
-    # Flatten: render form field values as static content and drop the widgets,
-    # so the filled values are reliable across all PDF viewers.
-    flat = io.BytesIO()
-    doc.bake()  # converts form fields to page content (PyMuPDF >= 1.23)
-    doc.save(flat, garbage=4, deflate=True)
-    doc.close()
-    return flat.getvalue()
+    # 2. Self-serve switched off for this policy (Derrick's per-client kill
+    #    switch). Hard block — something is wrong with the account.
+    if not policy.self_serve_enabled:
+        reasons.append("Self-service is unavailable on this policy. Please contact our office.")
+        audit.append("BLOCK_SELF_SERVE_DISABLED")
+        return GateResult(False, "block", reasons, audit)
 
+    # 3. Status must be active.
+    if policy.status != PolicyStatus.ACTIVE:
+        reasons.append("This policy is not currently active. Please contact our office.")
+        audit.append(f"BLOCK_STATUS_{policy.status.value.upper()}")
+        return GateResult(False, "block", reasons, audit)
 
-def dump_field_names(template_path: str) -> list[str]:
-    """One-time utility: list the AcroForm field names in your ACORD 25 so you
-    can build field_map. Run once, paste the names into the API's mapper."""
-    doc = fitz.open(template_path)
-    names = []
-    for page in doc:
-        for w in (page.widgets() or []):
-            names.append(w.field_name)
-    doc.close()
-    return names
+    # 4. Date window — the quiet save. Catches the most common staleness case
+    #    (an expired policy whose status flag was never updated) automatically.
+    if today < policy.effective_date:
+        reasons.append("This policy has not taken effect yet. Please contact our office.")
+        audit.append("BLOCK_NOT_YET_EFFECTIVE")
+        return GateResult(False, "block", reasons, audit)
+    if today > policy.expiration_date:
+        reasons.append("This policy has expired. Please contact our office to renew.")
+        audit.append("BLOCK_EXPIRED_BY_DATE")
+        return GateResult(False, "block", reasons, audit)
 
+    # 5. Required coverage data present and non-zero.
+    missing = [
+        line for line in REQUIRED_COVERAGE_LINES
+        if not policy.coverages.get(line)
+    ]
+    if missing:
+        reasons.append("Coverage details are incomplete on this policy. Please contact our office.")
+        audit.append("BLOCK_MISSING_COVERAGE_" + "_".join(m.upper() for m in missing))
+        return GateResult(False, "block", reasons, audit)
 
-# ---------------------------------------------------------------------------
-# FALLBACK PATH: branded sample certificate (runnable without a template)
-# ---------------------------------------------------------------------------
-def render_fallback_certificate(
-    content: CertContent,
-    signature_png_path: Optional[str] = None,
-) -> bytes:
-    doc = fitz.open()
-    page = doc.new_page(width=612, height=792)  # US Letter
-    M = 48
+    # 6. Basic holder sanity — never issue a cert to a blank holder.
+    if not request.holder_name.strip() or not request.holder_address.strip():
+        reasons.append("Certificate holder name and address are required.")
+        audit.append("BLOCK_INCOMPLETE_HOLDER")
+        return GateResult(False, "block", reasons, audit)
 
-    def text(x, y, s, size=9, color=INK, font="helv", bold=False):
-        page.insert_text((x, y), s, fontsize=size,
-                         fontname=("hebo" if bold else font), color=color)
-
-    # Header band
-    page.draw_rect(fitz.Rect(0, 0, 612, 92), color=None, fill=NAVY)
-    # Gold diamond-outline "P" monogram
-    cx, cy, r = 78, 46, 22
-    page.draw_polyline([(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy), (cx, cy - r)],
-                       color=GOLD, width=1.6, closePath=True)
-    text(cx - 6, cy + 7, "P", size=20, color=GOLD, bold=True)
-    text(118, 40, "PINNACLE RISK ADVISORS", size=15, color=CREAM, bold=True)
-    text(118, 58, "Certificate of Liability Insurance", size=10, color=GOLD)
-    text(430, 40, f"Certificate No.  {content.cert_number}", size=9, color=CREAM)
-    text(430, 58, f"Issued  {content.issue_date.strftime('%m/%d/%Y')}", size=9, color=CREAM)
-
-    y = 120
-    # Producer / Insured row
-    def labeled_box(x, w, label, body, height=84):
-        nonlocal_y = y
-        page.draw_rect(fitz.Rect(x, nonlocal_y, x + w, nonlocal_y + height),
-                       color=GOLD_DARK, width=0.6, fill=CREAM)
-        text(x + 8, nonlocal_y + 16, label, size=7.5, color=GOLD_DARK, bold=True)
-        ty = nonlocal_y + 30
-        for line in body.split("\n"):
-            text(x + 8, ty, line, size=8.5, color=INK)
-            ty += 12
-
-    labeled_box(M, 250, "PRODUCER", content.producer_block)
-    labeled_box(M + 266, 250, "INSURED", f"{content.insured_name}\n{content.insured_address}")
-    y += 100
-
-    # Coverage table
-    page.draw_rect(fitz.Rect(M, y, 612 - M, y + 20), color=None, fill=NAVY)
-    text(M + 6, y + 14, "COVERAGES", size=8.5, color=CREAM, bold=True)
-    y += 20
-    headers = [("COVERAGE", M + 6), ("CARRIER", M + 150), ("POLICY #", M + 270),
-               ("EFF", M + 360), ("EXP", M + 415), ("LIMIT", M + 470)]
-    page.draw_rect(fitz.Rect(M, y, 612 - M, y + 16), color=GOLD_DARK, width=0.5, fill=(0.96, 0.93, 0.86))
-    for h, x in headers:
-        text(x, y + 11, h, size=7, color=NAVY, bold=True)
-    y += 16
-    for cov in content.coverages:
-        limit_str = "  ".join(f"{k} ${v:,.0f}" for k, v in cov["limits"].items())
-        row = [(cov["line"], M + 6), (cov["carrier"], M + 150), (cov["policy_number"], M + 270),
-               (cov["eff"], M + 360), (cov["exp"], M + 415)]
-        page.draw_rect(fitz.Rect(M, y, 612 - M, y + 26), color=GOLD_DARK, width=0.3)
-        for v, x in row:
-            text(x, y + 11, str(v), size=7.5, color=INK)
-        text(M + 470, y + 11, limit_str.split("  ")[0], size=7, color=INK)
-        if len(limit_str.split("  ")) > 1:
-            text(M + 470, y + 21, limit_str.split("  ")[1], size=7, color=INK)
-        y += 26
-    y += 14
-
-    # Description of operations
-    page.draw_rect(fitz.Rect(M, y, 612 - M, y + 50), color=GOLD_DARK, width=0.6, fill=CREAM)
-    text(M + 8, y + 14, "DESCRIPTION OF OPERATIONS / LOCATIONS / VEHICLES", size=7, color=GOLD_DARK, bold=True)
-    text(M + 8, y + 30, content.description_of_operations[:120], size=8, color=INK)
-    y += 66
-
-    # Certificate holder
-    page.draw_rect(fitz.Rect(M, y, M + 300, y + 70), color=GOLD_DARK, width=0.6, fill=CREAM)
-    text(M + 8, y + 14, "CERTIFICATE HOLDER", size=7.5, color=GOLD_DARK, bold=True)
-    ty = y + 30
-    for line in f"{content.holder_name}\n{content.holder_address}".split("\n"):
-        text(M + 8, ty, line, size=8.5, color=INK)
-        ty += 12
-
-    # Authorized representative
-    page.draw_rect(fitz.Rect(M + 316, y, 612 - M, y + 70), color=GOLD_DARK, width=0.6, fill=CREAM)
-    text(M + 324, y + 14, "AUTHORIZED REPRESENTATIVE", size=7.5, color=GOLD_DARK, bold=True)
-    sig_rect = fitz.Rect(M + 324, y + 24, 612 - M - 8, y + 56)
-    if signature_png_path:
-        page.insert_image(sig_rect, filename=signature_png_path)
-    else:
-        text(M + 324, y + 46, "Derrick Brown — Pinnacle Risk Advisors", size=9, color=NAVY, bold=True)
-    page.draw_line((M + 324, y + 58), (612 - M - 8, y + 58), color=SLATE, width=0.5)
-    y += 86
-
-    text(M, y + 6, f"Coverage data current as of {content.data_current_as_of.strftime('%m/%d/%Y')}.",
-         size=7, color=SLATE)
-    text(M, y + 16, "This certificate is issued as a matter of information only and confers no rights upon the holder.",
-         size=7, color=SLATE)
-
-    # SAMPLE watermark — fallback only, must never reach a real holder
-    tw = fitz.TextWriter(page.rect)
-    tw.append((120, 460), "SAMPLE", font=fitz.Font("hebo"), fontsize=96)
-    pivot = fitz.Point(306, 430)
-    matrix = fitz.Matrix(1, 0, 0, 1, 0, 0).prerotate(45)
-    tw.write_text(page, color=(0.82, 0.82, 0.82), opacity=0.18,
-                  morph=(pivot, matrix))
-
-    out = io.BytesIO()
-    doc.save(out, garbage=4, deflate=True)
-    doc.close()
-    return out.getvalue()
-
-
-def generate_certificate(content: CertContent,
-                         template_path: Optional[str] = None,
-                         field_map: Optional[dict] = None,
-                         signature_png_path: Optional[str] = None,
-                         signature_rect: Optional[tuple] = None) -> bytes:
-    """Single entry point the API calls after the gate returns auto_issue."""
-    if template_path and field_map:
-        return fill_acord25_template(template_path, field_map, signature_png_path, signature_rect)
-    return render_fallback_certificate(content, signature_png_path)
+    # All gates passed: plain informational cert on verified-active, in-date
+    # coverage. This — and only this — is what the pre-applied authorized-rep
+    # signature is authorized to sign.
+    reasons.append("Standard certificate issued.")
+    audit.append("AUTO_ISSUE_OK")
+    audit.append(f"COVERAGE_SNAPSHOT_ASOF_{(policy.data_current_as_of or today).isoformat()}")
+    return GateResult(True, "auto_issue", reasons, audit)
