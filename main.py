@@ -247,7 +247,10 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
             "notes": req.description_of_operations,
         })
         if RESEND_KEY:
-            await notify_agent_special(body, policy)
+            try:
+                await notify_agent_special(body, policy)
+            except Exception:
+                pass  # the special_requests row is the source of truth; email is a nudge
         return {"status": "routed", "message": result.reasons[0]}
 
     # ---- block ----
@@ -289,15 +292,25 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
         "pdf_path": pdf_path,
     })
 
+    # Email is the convenience copy; the cert is the product. A delivery failure
+    # (unverified domain, Resend hiccup, bad address) must NEVER discard a cert
+    # the client successfully issued. So the send is best-effort and its outcome
+    # is reported back, not raised.
     recipients = [r for r in [req.holder_email] if r]
+    email_status = "not_sent"
     if recipients and RESEND_KEY:
-        await send_certificate_email(recipients, cert_number, policy["named_insured"], pdf)
+        try:
+            await send_certificate_email(recipients, cert_number, policy["named_insured"], pdf)
+            email_status = "sent"
+        except Exception as e:
+            email_status = f"failed: {type(e).__name__}"
 
     return {
         "status": "issued",
         "cert_number": cert_number,
         "pdf_base64": base64.b64encode(pdf).decode(),  # client offers immediate download
-        "emailed_to": recipients,
+        "emailed_to": recipients if email_status == "sent" else [],
+        "email_status": email_status,
     }
 
 
