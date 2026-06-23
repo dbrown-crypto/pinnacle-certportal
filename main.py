@@ -32,6 +32,7 @@ from typing import Optional
 
 import httpx
 import jwt
+from jwt import PyJWKClient
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -51,6 +52,12 @@ TEMPLATE_PATH = os.environ.get("ACORD25_TEMPLATE_PATH") or None
 SIGNATURE_PATH = os.environ.get("SIGNATURE_PNG_PATH") or None
 ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
 
+# Supabase now signs auth tokens with asymmetric keys (ES256) by default. We
+# verify them against the project's public JWKS. Legacy HS256 shared-secret
+# tokens are still accepted as a fallback if SUPABASE_JWT_SECRET is set.
+JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else ""
+_jwk_client = PyJWKClient(JWKS_URL) if JWKS_URL else None
+
 app = FastAPI(title="Pinnacle Self-Serve Certificates")
 app.add_middleware(
     CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"],
@@ -69,13 +76,26 @@ class IssueRequest(BaseModel):
 
 # --- auth ---------------------------------------------------------------------
 def verify_jwt(authorization: Optional[str]) -> str:
-    """Return the authenticated user's id (== clients.id) or raise 401."""
+    """Return the authenticated user's id (== clients.id) or raise 401.
+
+    Handles Supabase's current asymmetric signing keys (ES256/RS256) by
+    verifying against the project's public JWKS, and falls back to a legacy
+    HS256 shared secret for older tokens. Survives key rotation."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Missing bearer token.")
     token = authorization.split(" ", 1)[1]
     try:
-        claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        alg = jwt.get_unverified_header(token).get("alg", "")
+        if alg.startswith(("ES", "RS")):
+            if not _jwk_client:
+                raise HTTPException(401, "Auth not configured.")
+            key = _jwk_client.get_signing_key_from_jwt(token).key
+            claims = jwt.decode(token, key, algorithms=[alg], audience="authenticated")
+        else:
+            claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience="authenticated")
         return claims["sub"]
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(401, "Invalid or expired session.")
 
