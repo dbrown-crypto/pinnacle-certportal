@@ -1,0 +1,50 @@
+# render.yaml — Render Blueprint for the Pinnacle certificate portal backend.
+#
+# Deploys the FastAPI service (gate + cert generation + audit). PyMuPDF needs a
+# real Python runtime, which is why this lives on Render, not Netlify.
+#
+# Use: in Render, New → Blueprint → point at the repo. Render reads this file.
+# Secrets are marked `sync: false` — set their values in the Render dashboard
+# (Environment tab) AFTER the first deploy. Never commit real values.
+#
+# Note: the free plan sleeps after ~15 min idle, so the FIRST certificate after
+# a quiet stretch may take ~30s while it wakes. Fine for testing; bump to a
+# cheap paid instance before heavy client use if that delay bothers you.
+
+services:
+  - type: web
+    name: pinnacle-certportal-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    region: ohio                      # match Supabase us-east-2 for low latency
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      # --- secrets: set values in the Render dashboard, never in git ---
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: ADMIN_USER_IDS            # Derrick's Supabase user UUID(s), comma-sep
+        sync: false
+      - key: ALLOWED_ORIGINS           # the Netlify URL, set after frontend deploy
+        sync: false
+      # --- non-secret config: safe to keep here ---
+      - key: SUPABASE_URL
+        value: https://dvjnnhwuamwcvqoxmske.supabase.co
+      - key: MAIL_FROM
+        value: Pinnacle Risk Advisors <certs@pinnacleriskad.com>
+      - key: AGENT_NOTIFY_EMAIL
+        value: dbrown@pinnacleriskad.com
+      # --- leave UNSET for the sample-cert phase; set when wiring the real ACORD 25 ---
+      # - key: ACORD25_TEMPLATE_PATH
+      # - key: SIGNATURE_PNG_PATH
+
+# Railway alternative: no blueprint needed — set the same env vars in the Railway
+# dashboard and use start command:  uvicorn main:app --host 0.0.0.0 --port $PORT
+# with root directory `backend`.
