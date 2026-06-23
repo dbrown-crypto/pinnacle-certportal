@@ -1,156 +1,400 @@
 """
-gate.py — Pinnacle Risk Advisors self-serve certificate portal
-The validation gate. This is the product.
+main.py — Pinnacle Risk Advisors self-serve certificate portal (backend)
 
-A client-initiated certificate may ONLY be issued automatically when it is a
-plain, informational ACORD 25 against currently-bound, in-force coverage.
-Anything else routes to a human (Derrick). This module is the single source of
-truth for that decision. It is deliberately dependency-free so it can be unit
-tested in isolation and audited at a glance.
+The server-side enforcement point. The browser cannot be trusted: hiding the
+"Additional Insured" checkbox in the UI is convenience, but THIS service is the
+control. On every issuance request it:
 
-NOTHING in the frontend is a security control. Hiding the "Additional Insured"
-checkbox is UX. THIS file is the control. The API must call evaluate_gate()
-server-side on every issuance request and refuse to generate a certificate
-unless it returns allow=True.
+  1. Verifies the caller's Supabase JWT (who are you).
+  2. Loads the policy with the SERVICE_ROLE key, then confirms it belongs to
+     that client (defense in depth on top of RLS).
+  3. Runs evaluate_gate() — the same pure function in gate.py.
+  4. Branches on the route:
+       auto_issue     -> generate, sign, store, email, write audit, return PDF
+       route_to_agent -> create special_request, notify Derrick, write audit
+       block          -> write audit (blocked attempt), return the reason
+  5. Never issues anything the gate did not approve.
+
+Run:  uvicorn main:app --host 0.0.0.0 --port 8000
+Env:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET,
+      RESEND_API_KEY, MAIL_FROM (e.g. "Pinnacle Risk Advisors <certs@pinnacleriskad.com>"),
+      AGENT_NOTIFY_EMAIL (dbrown@pinnacleriskad.com),
+      ACORD25_TEMPLATE_PATH (optional; omit to use branded fallback),
+      SIGNATURE_PNG_PATH (optional)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date
-from enum import Enum
+import os
+import base64
+import datetime as dt
 from typing import Optional
 
+import httpx
+import jwt
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-# --- Special-wording flags ----------------------------------------------------
-# If a holder's contract requires ANY of these, the certificate is no longer a
-# plain informational cert. It makes a representation about coverage behavior
-# that the gate cannot verify is actually endorsed onto the policy, so it must
-# go to a human. These are the flags the client form will surface as a single
-# "this holder requires special wording" path — never as auto-issuable options.
-class SpecialWording(str, Enum):
-    ADDITIONAL_INSURED = "additional_insured"
-    WAIVER_OF_SUBROGATION = "waiver_of_subrogation"
-    PRIMARY_NON_CONTRIBUTORY = "primary_non_contributory"
-    SPECIAL_LANGUAGE = "special_language"  # any free-text wording request
+from gate import (
+    evaluate_gate, PolicySnapshot, CertRequest, PolicyStatus, SpecialWording, GateResult,
+)
+from cert_generator import generate_certificate, CertContent
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
+RESEND_KEY = os.environ.get("RESEND_API_KEY", "")
+MAIL_FROM = os.environ.get("MAIL_FROM", "Pinnacle Risk Advisors <certs@pinnacleriskad.com>")
+AGENT_EMAIL = os.environ.get("AGENT_NOTIFY_EMAIL", "dbrown@pinnacleriskad.com")
+TEMPLATE_PATH = os.environ.get("ACORD25_TEMPLATE_PATH") or None
+SIGNATURE_PATH = os.environ.get("SIGNATURE_PNG_PATH") or None
+ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+
+app = FastAPI(title="Pinnacle Self-Serve Certificates")
+app.add_middleware(
+    CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"],
+)
 
 
-class PolicyStatus(str, Enum):
-    ACTIVE = "active"
-    CANCELLED = "cancelled"
-    PENDING = "pending"
-    EXPIRED = "expired"  # may be set explicitly; also derived from dates
-
-
-# Coverage lines that MUST carry a non-zero limit for a trucking COI to be
-# meaningful. A cert that shows blank Auto Liability is worse than no cert.
-REQUIRED_COVERAGE_LINES = ("auto_liability",)
-
-
-@dataclass
-class PolicySnapshot:
-    """The policy row as stored in Supabase, passed in by the API after it has
-    loaded the record the authenticated client is actually entitled to (RLS
-    guarantees they can only load their own)."""
+# --- request/response models --------------------------------------------------
+class IssueRequest(BaseModel):
     policy_id: str
-    named_insured: str
-    status: PolicyStatus
-    effective_date: date
-    expiration_date: date
-    self_serve_enabled: bool
-    coverages: dict[str, Optional[float]] = field(default_factory=dict)  # line -> limit
-    data_current_as_of: Optional[date] = None
-
-
-@dataclass
-class CertRequest:
-    """What the client submitted from the Add Certificate Holder form."""
     holder_name: str
     holder_address: str
-    holder_email: Optional[str]
+    holder_email: Optional[str] = None
     description_of_operations: str = ""
-    requested_special_wording: list[SpecialWording] = field(default_factory=list)
+    requested_special_wording: list[str] = []   # values from SpecialWording enum
 
 
-@dataclass
-class GateResult:
-    allow: bool
-    route: str               # "auto_issue" | "route_to_agent" | "block"
-    reasons: list[str]       # human-readable, safe to show client and to log
-    audit_codes: list[str]   # machine codes for the audit trail
+# --- auth ---------------------------------------------------------------------
+def verify_jwt(authorization: Optional[str]) -> str:
+    """Return the authenticated user's id (== clients.id) or raise 401."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Missing bearer token.")
+    token = authorization.split(" ", 1)[1]
+    try:
+        claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"], audience="authenticated")
+        return claims["sub"]
+    except Exception:
+        raise HTTPException(401, "Invalid or expired session.")
 
 
-def evaluate_gate(
-    policy: PolicySnapshot,
-    request: CertRequest,
-    today: Optional[date] = None,
-) -> GateResult:
-    """Decide what happens to a certificate request. Pure function: no I/O.
+# --- Supabase REST helpers (service role) ------------------------------------
+def _sb_headers() -> dict:
+    return {
+        "apikey": SERVICE_KEY,
+        "Authorization": f"Bearer {SERVICE_KEY}",
+        "Content-Type": "application/json",
+    }
 
-    Returns one of three routes:
-      - auto_issue       -> safe to generate, sign, send, log
-      - route_to_agent   -> create a request task for Derrick; issue NOTHING
-      - block            -> tell client to contact the agency; issue NOTHING
-    """
-    today = today or date.today()
-    reasons: list[str] = []
-    audit: list[str] = []
 
-    # 1. Special wording is a hard route-to-agent, checked first. Even on a
-    #    cancelled policy we route rather than block, so Derrick sees the intent.
-    if request.requested_special_wording:
-        names = ", ".join(w.value for w in request.requested_special_wording)
-        reasons.append(
-            "This certificate requires special wording "
-            f"({names}) and will be reviewed and sent by our office."
-        )
-        audit.append("ROUTE_SPECIAL_WORDING")
-        return GateResult(False, "route_to_agent", reasons, audit)
+async def load_policy(policy_id: str) -> dict:
+    url = f"{SUPABASE_URL}/rest/v1/policies"
+    params = {"id": f"eq.{policy_id}", "select": "*"}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(url, headers=_sb_headers(), params=params)
+        r.raise_for_status()
+        rows = r.json()
+    if not rows:
+        raise HTTPException(404, "Policy not found.")
+    return rows[0]
 
-    # 2. Self-serve switched off for this policy (Derrick's per-client kill
-    #    switch). Hard block — something is wrong with the account.
-    if not policy.self_serve_enabled:
-        reasons.append("Self-service is unavailable on this policy. Please contact our office.")
-        audit.append("BLOCK_SELF_SERVE_DISABLED")
-        return GateResult(False, "block", reasons, audit)
 
-    # 3. Status must be active.
-    if policy.status != PolicyStatus.ACTIVE:
-        reasons.append("This policy is not currently active. Please contact our office.")
-        audit.append(f"BLOCK_STATUS_{policy.status.value.upper()}")
-        return GateResult(False, "block", reasons, audit)
+async def sb_insert(table: str, row: dict) -> dict:
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={**_sb_headers(), "Prefer": "return=representation"}, json=row)
+        r.raise_for_status()
+        return r.json()[0]
 
-    # 4. Date window — the quiet save. Catches the most common staleness case
-    #    (an expired policy whose status flag was never updated) automatically.
-    if today < policy.effective_date:
-        reasons.append("This policy has not taken effect yet. Please contact our office.")
-        audit.append("BLOCK_NOT_YET_EFFECTIVE")
-        return GateResult(False, "block", reasons, audit)
-    if today > policy.expiration_date:
-        reasons.append("This policy has expired. Please contact our office to renew.")
-        audit.append("BLOCK_EXPIRED_BY_DATE")
-        return GateResult(False, "block", reasons, audit)
 
-    # 5. Required coverage data present and non-zero.
-    missing = [
-        line for line in REQUIRED_COVERAGE_LINES
-        if not policy.coverages.get(line)
-    ]
-    if missing:
-        reasons.append("Coverage details are incomplete on this policy. Please contact our office.")
-        audit.append("BLOCK_MISSING_COVERAGE_" + "_".join(m.upper() for m in missing))
-        return GateResult(False, "block", reasons, audit)
+async def storage_upload(path: str, pdf: bytes) -> str:
+    url = f"{SUPABASE_URL}/storage/v1/object/certificates/{path}"
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(url, headers={**_sb_headers(), "Content-Type": "application/pdf"}, content=pdf)
+        r.raise_for_status()
+    return f"certificates/{path}"
 
-    # 6. Basic holder sanity — never issue a cert to a blank holder.
-    if not request.holder_name.strip() or not request.holder_address.strip():
-        reasons.append("Certificate holder name and address are required.")
-        audit.append("BLOCK_INCOMPLETE_HOLDER")
-        return GateResult(False, "block", reasons, audit)
 
-    # All gates passed: plain informational cert on verified-active, in-date
-    # coverage. This — and only this — is what the pre-applied authorized-rep
-    # signature is authorized to sign.
-    reasons.append("Standard certificate issued.")
-    audit.append("AUTO_ISSUE_OK")
-    audit.append(f"COVERAGE_SNAPSHOT_ASOF_{(policy.data_current_as_of or today).isoformat()}")
-    return GateResult(True, "auto_issue", reasons, audit)
+# --- email (Resend) -----------------------------------------------------------
+async def send_certificate_email(to: list[str], cert_number: str, insured: str, pdf: bytes):
+    """Deliver to the holder under the Pinnacle domain, CC the insured + Derrick."""
+    payload = {
+        "from": MAIL_FROM,
+        "to": to,
+        "cc": [AGENT_EMAIL],
+        "subject": f"Certificate of Insurance — {insured} ({cert_number})",
+        "text": (
+            f"Attached is the certificate of insurance for {insured}, "
+            f"issued by Pinnacle Risk Advisors.\n\n"
+            f"Certificate number: {cert_number}\n"
+            f"This certificate is issued as a matter of information only.\n\n"
+            f"Pinnacle Risk Advisors LLC · (943) 239-3439 · dbrown@pinnacleriskad.com"
+        ),
+        "attachments": [{
+            "filename": f"COI_{cert_number}.pdf",
+            "content": base64.b64encode(pdf).decode(),
+        }],
+    }
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post("https://api.resend.com/emails",
+                         headers={"Authorization": f"Bearer {RESEND_KEY}"}, json=payload)
+        r.raise_for_status()
+
+
+async def notify_agent_special(req: IssueRequest, policy: dict):
+    payload = {
+        "from": MAIL_FROM,
+        "to": [AGENT_EMAIL],
+        "subject": f"[ACTION] Special-wording cert request — {policy['named_insured']}",
+        "text": (
+            f"A client requested a certificate that needs review (not auto-issued).\n\n"
+            f"Insured: {policy['named_insured']}\n"
+            f"Holder:  {req.holder_name}\n         {req.holder_address}\n"
+            f"Email:   {req.holder_email or '—'}\n"
+            f"Wording: {', '.join(req.requested_special_wording)}\n"
+            f"Ops:     {req.description_of_operations}\n\n"
+            f"Open it in the admin queue to review and send."
+        ),
+    }
+    async with httpx.AsyncClient(timeout=20) as c:
+        await c.post("https://api.resend.com/emails",
+                     headers={"Authorization": f"Bearer {RESEND_KEY}"}, json=payload)
+
+
+# --- helpers ------------------------------------------------------------------
+def _to_snapshot(policy: dict) -> PolicySnapshot:
+    return PolicySnapshot(
+        policy_id=policy["id"],
+        named_insured=policy["named_insured"],
+        status=PolicyStatus(policy["status"]),
+        effective_date=dt.date.fromisoformat(policy["effective_date"]),
+        expiration_date=dt.date.fromisoformat(policy["expiration_date"]),
+        self_serve_enabled=policy["self_serve_enabled"],
+        coverages=policy.get("coverages") or {},
+        data_current_as_of=dt.date.fromisoformat(policy["data_current_as_of"]),
+    )
+
+
+def _next_cert_number() -> str:
+    stamp = dt.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    return f"PRA-{stamp}"
+
+
+async def write_audit(client_id, policy_id, result: GateResult, holder_name: str):
+    await sb_insert("audit_log", {
+        "client_id": client_id, "policy_id": policy_id,
+        "action": result.route, "audit_codes": result.audit_codes,
+        "reasons": result.reasons, "holder_name": holder_name,
+    })
+
+
+# --- endpoints ----------------------------------------------------------------
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "template": bool(TEMPLATE_PATH), "signature": bool(SIGNATURE_PATH)}
+
+
+@app.post("/issue-certificate")
+async def issue_certificate(body: IssueRequest, authorization: Optional[str] = Header(None)):
+    user_id = verify_jwt(authorization)
+    policy = await load_policy(body.policy_id)
+
+    # Defense in depth: even though RLS scopes client reads, the service-role
+    # backend can read any policy, so re-check ownership here explicitly.
+    if policy["client_id"] != user_id:
+        raise HTTPException(403, "This policy is not associated with your account.")
+
+    req = CertRequest(
+        holder_name=body.holder_name,
+        holder_address=body.holder_address,
+        holder_email=body.holder_email,
+        description_of_operations=body.description_of_operations,
+        requested_special_wording=[SpecialWording(w) for w in body.requested_special_wording],
+    )
+
+    result = evaluate_gate(_to_snapshot(policy), req)
+    await write_audit(user_id, policy["id"], result, body.holder_name)
+
+    # ---- route_to_agent ----
+    if result.route == "route_to_agent":
+        await sb_insert("special_requests", {
+            "policy_id": policy["id"], "client_id": user_id,
+            "holder_name": req.holder_name, "holder_address": req.holder_address,
+            "holder_email": req.holder_email,
+            "requested_wording": body.requested_special_wording,
+            "notes": req.description_of_operations,
+        })
+        if RESEND_KEY:
+            await notify_agent_special(body, policy)
+        return {"status": "routed", "message": result.reasons[0]}
+
+    # ---- block ----
+    if result.route == "block":
+        raise HTTPException(409, detail={"status": "blocked", "message": result.reasons[0]})
+
+    # ---- auto_issue ----
+    cert_number = _next_cert_number()
+    content = CertContent(
+        cert_number=cert_number,
+        issue_date=dt.date.today(),
+        producer_block=policy["producer_block"],
+        insured_name=policy["named_insured"],
+        insured_address=policy["insured_address"],
+        holder_name=req.holder_name,
+        holder_address=req.holder_address,
+        description_of_operations=req.description_of_operations,
+        coverages=policy.get("carriers") or [],
+        data_current_as_of=dt.date.fromisoformat(policy["data_current_as_of"]),
+    )
+    pdf = generate_certificate(
+        content,
+        template_path=TEMPLATE_PATH,
+        field_map=_build_field_map(policy, req, cert_number) if TEMPLATE_PATH else None,
+        signature_png_path=SIGNATURE_PATH,
+    )
+
+    pdf_path = None
+    if SUPABASE_URL and SERVICE_KEY:
+        pdf_path = await storage_upload(f"{user_id}/{cert_number}.pdf", pdf)
+
+    await sb_insert("issued_certificates", {
+        "cert_number": cert_number, "policy_id": policy["id"], "client_id": user_id,
+        "holder_name": req.holder_name, "holder_address": req.holder_address,
+        "holder_email": req.holder_email, "description_of_ops": req.description_of_operations,
+        "coverage_snapshot": {"coverages": policy.get("coverages"),
+                              "carriers": policy.get("carriers"),
+                              "data_current_as_of": policy["data_current_as_of"]},
+        "pdf_path": pdf_path,
+    })
+
+    recipients = [r for r in [req.holder_email] if r]
+    if recipients and RESEND_KEY:
+        await send_certificate_email(recipients, cert_number, policy["named_insured"], pdf)
+
+    return {
+        "status": "issued",
+        "cert_number": cert_number,
+        "pdf_base64": base64.b64encode(pdf).decode(),  # client offers immediate download
+        "emailed_to": recipients,
+    }
+
+
+# ============================================================================
+# Admin endpoints (Derrick's back office). The service-role key stays here on
+# the server; the admin page authenticates as Derrick via Supabase and calls
+# these with his bearer token. Access is gated to an explicit allowlist of
+# user ids so no other authenticated client can reach them.
+# ============================================================================
+ADMIN_USER_IDS = set(filter(None, os.environ.get("ADMIN_USER_IDS", "").split(",")))
+
+
+def require_admin(authorization: Optional[str]) -> str:
+    uid = verify_jwt(authorization)
+    if uid not in ADMIN_USER_IDS:
+        raise HTTPException(403, "Admin access required.")
+    return uid
+
+
+async def sb_get(table: str, params: dict) -> list:
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=_sb_headers(), params=params)
+        r.raise_for_status()
+        return r.json()
+
+
+async def sb_patch(table: str, match: dict, patch: dict) -> list:
+    params = {k: f"eq.{v}" for k, v in match.items()}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.patch(f"{SUPABASE_URL}/rest/v1/{table}",
+                          headers={**_sb_headers(), "Prefer": "return=representation"},
+                          params=params, json=patch)
+        r.raise_for_status()
+        return r.json()
+
+
+class PolicyUpsert(BaseModel):
+    id: Optional[str] = None
+    client_id: str
+    named_insured: str
+    usdot: Optional[str] = None
+    status: str = "active"
+    self_serve_enabled: bool = True
+    effective_date: str
+    expiration_date: str
+    producer_block: str
+    insured_address: str
+    coverages: dict = {}
+    carriers: list = []
+    data_current_as_of: str
+
+
+class StatusPatch(BaseModel):
+    status: Optional[str] = None
+    self_serve_enabled: Optional[bool] = None
+    data_current_as_of: Optional[str] = None
+
+
+@app.get("/admin/policies")
+async def admin_list_policies(authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    return await sb_get("policies", {"select": "*", "order": "named_insured"})
+
+
+@app.post("/admin/policies")
+async def admin_upsert_policy(body: PolicyUpsert, authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    row = body.model_dump(exclude_none=True)
+    if body.id:
+        return (await sb_patch("policies", {"id": body.id}, row))[0]
+    row.pop("id", None)
+    return await sb_insert("policies", row)
+
+
+@app.post("/admin/policies/{policy_id}/status")
+async def admin_patch_status(policy_id: str, body: StatusPatch, authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    patch = body.model_dump(exclude_none=True)
+    if not patch:
+        raise HTTPException(400, "Nothing to update.")
+    return (await sb_patch("policies", {"id": policy_id}, patch))[0]
+
+
+@app.get("/admin/special-requests")
+async def admin_special(authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    return await sb_get("special_requests", {"select": "*", "order": "created_at.desc"})
+
+
+@app.post("/admin/special-requests/{req_id}/status")
+async def admin_special_status(req_id: str, body: dict, authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    status = body.get("status")
+    if status not in ("open", "in_progress", "sent", "declined"):
+        raise HTTPException(400, "Invalid status.")
+    return (await sb_patch("special_requests", {"id": req_id}, {"status": status}))[0]
+
+
+@app.get("/admin/audit")
+async def admin_audit(authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    return await sb_get("audit_log", {"select": "*", "order": "occurred_at.desc", "limit": "200"})
+
+
+@app.get("/admin/certificates")
+async def admin_certs(authorization: Optional[str] = Header(None)):
+    require_admin(authorization)
+    return await sb_get("issued_certificates", {"select": "*", "order": "issued_at.desc", "limit": "200"})
+
+
+def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
+    """Map stored data -> your ACORD 25 field names. Discover the names once
+    with cert_generator.dump_field_names(your_template) and fill this in."""
+    return {
+        # "PRODUCER": policy["producer_block"],
+        # "INSURED": f"{policy['named_insured']}\n{policy['insured_address']}",
+        # "CERTIFICATE_HOLDER": f"{req.holder_name}\n{req.holder_address}",
+        # "DESCRIPTION_OF_OPERATIONS": req.description_of_operations,
+        # ...map each coverage line / limit / policy number / dates...
+    }
