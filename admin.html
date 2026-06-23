@@ -12,7 +12,7 @@
     --ok:#2f7d52;--warn:#9a6b16;--stop:#9a3434}
   *{box-sizing:border-box}
   body{margin:0;font-family:Raleway,system-ui,sans-serif;color:var(--ink);background:var(--cream-2)}
-  header{background:var(--navy);color:var(--cream);padding:14px 22px;display:flex;align-items:center;justify-content:space-between}
+  header{background:var(--navy);color:var(--cream);padding:14px 22px;display:fhlex;align-items:center;justify-content:space-between}
   header h1{font-family:"Playfair Display",serif;font-size:18px;margin:0}
   header .who{font-size:12px;color:rgba(251,248,241,.7)}
   .link{background:none;border:0;color:var(--gold);cursor:pointer;font:inherit;text-decoration:underline}
@@ -105,9 +105,9 @@
 
 <script>
 // ---- CONFIG ----
-const SUPABASE_URL = "https://YOUR-PROJECT.supabase.co";
-const SUPABASE_ANON_KEY = "YOUR_ANON_KEY";
-const BACKEND_URL = "https://YOUR-BACKEND-HOST";
+const SUPABASE_URL = "https://dvjnnhwuamwcvqoxmske.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR2am5uaHd1YW13Y3Zxb3htc2tlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxNzU1NzgsImV4cCI6MjA5Nzc1MTU3OH0.StKXBidLUrAQc_q4qMARAGA8Rbpf8ht9vwGvmCOvuLo";
+const BACKEND_URL = "https://pinnacle-certportal.onrender.com";
 // ----------------
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = id => document.getElementById(id);
