@@ -75,7 +75,7 @@ class IssueRequest(BaseModel):
 def verify_jwt(authorization: Optional[str]) -> str:
       if not authorization or not authorization.lower().startswith("bearer "):
                 raise HTTPException(401, "Missing bearer token.")
-            token = authorization.split(" ", 1)[1]
+    token = authorization.split(" ", 1)[1]
     try:
               alg = jwt.get_unverified_header(token).get("alg", "")
               if alg.startswith(("ES", "RS")):
