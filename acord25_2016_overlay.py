@@ -26,7 +26,7 @@ INK = (0.0, 0.0, 0.0)
 
 # ACORD 25 (2016/03) coordinates — PDF points, y from TOP. Page 612 x 792.
 C25 = {
-    "date":          (500, 56),
+    "date":          (512, 44),
 
     "producer_l1":   (24, 134), "producer_l2": (24, 143), "producer_l3": (24, 152),
     "producer_l4":   (24, 161), "producer_l5": (24, 170),
@@ -62,8 +62,16 @@ C25 = {
     "desc4": (24, 607), "desc5": (24, 616),
 
     "holder_l1": (24, 668), "holder_l2": (24, 677), "holder_l3": (24, 686),
-    "auth_rep":  (400, 703),
+    "auth_rep":  (405, 706),
 }
+
+
+def _put_right(page, x_right, y, text, size=SIZE):
+    """Right-align text so it ends at x_right (keeps limit values off the border)."""
+    if text is None or str(text).strip() == "":
+        return
+    w = fitz.get_text_length(str(text), fontname=FONT, fontsize=size)
+    page.insert_text((x_right - w, y), str(text), fontname=FONT, fontsize=size, color=INK)
 
 
 def _put(page, coords, key, text, size=SIZE):
@@ -143,7 +151,7 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         lim = auto.get("limits") or {}
         csl = lim.get("CSL") or next(iter(lim.values()), None)
         if csl is not None:
-            _put(page, C, "auto_csl", _money(csl))
+            _put_right(page, 593, C["auto_csl"][1], _money(csl))
 
     cargo = next((c for c in carriers if "cargo" in str(c.get("line", "")).lower()), None)
     if cargo:
@@ -154,11 +162,11 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         _put(page, C, "cargo_exp", cargo.get("exp"))
         ded = cargo.get("deductible")
         if ded is not None:
-            _put(page, C, "cargo_ded", f"${_money(ded)} Ded")
+            _put_right(page, 548, C["cargo_ded"][1], f"${_money(ded)} Ded")
         lim = cargo.get("limits") or {}
         amt = next(iter(lim.values()), None)
         if amt is not None:
-            _put(page, C, "cargo_limit", f"${_money(amt)}")
+            _put_right(page, 593, C["cargo_limit"][1], f"${_money(amt)}")
 
     # description: ops + any other coverages + stamp
     desc = []
