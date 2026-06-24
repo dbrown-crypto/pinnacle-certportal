@@ -270,6 +270,10 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
         description_of_operations=req.description_of_operations,
         coverages=policy.get("carriers") or [],
         data_current_as_of=dt.date.fromisoformat(policy["data_current_as_of"]),
+        usdot=policy.get("usdot") or "",
+        mc_number=policy.get("mc_number") or "",
+        drivers=policy.get("drivers") or [],
+        trailers=policy.get("trailers") or [],
     )
     pdf = generate_certificate(
         content,
