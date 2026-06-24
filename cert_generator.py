@@ -22,7 +22,8 @@ is only safe because the cert can only ever be the safe kind.
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 
@@ -54,6 +55,12 @@ class CertContent:
     description_of_operations: str
     coverages: list[dict]         # [{line, carrier, policy_number, eff, exp, limits:{label:amount}}]
     data_current_as_of: date
+
+    # Trucking-specific fields (optional, backward-compatible)
+    usdot: str = ""
+    mc_number: str = ""
+    drivers: list = field(default_factory=list)
+    trailers: list = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -217,12 +224,16 @@ def render_fallback_certificate(
     return out.getvalue()
 
 
-def generate_certificate(content: CertContent,
-                         template_path: Optional[str] = None,
-                         field_map: Optional[dict] = None,
-                         signature_png_path: Optional[str] = None,
-                         signature_rect: Optional[tuple] = None) -> bytes:
+def generate_certificate(content, template_path=None, field_map=None,
+                         signature_png_path=None, signature_rect=None):
     """Single entry point the API calls after the gate returns auto_issue."""
-    if template_path and field_map:
-        return fill_acord25_template(template_path, field_map, signature_png_path, signature_rect)
+    if template_path:
+        from acord25_2016_overlay import generate_trucking_cert
+        return generate_trucking_cert(
+            content, template_path,
+            blank_101_path=os.environ.get("ACORD101_TEMPLATE_PATH"),
+            include_101=bool(getattr(content, "drivers", None) or
+                             getattr(content, "trailers", None)),
+            signature_png_path=signature_png_path,
+            signature_rect=signature_rect)
     return render_fallback_certificate(content, signature_png_path)
