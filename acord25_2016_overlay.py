@@ -41,21 +41,22 @@ C25 = {
 
     "cert_number":   (305, 249),
 
-    # AUTOMOBILE LIABILITY row (label y386.6 on this form ~12pt higher than 2025)
-    "auto_ltr":      (16, 394),
-    "auto_policy":   (250, 394),
-    "auto_eff":      (337, 394),
-    "auto_exp":      (384, 394),
-    "auto_csl":      (573, 390),
+    # AUTOMOBILE LIABILITY band runs y384-444; policy/dates centered at y414.
+    # CSL value belongs in the COMBINED SINGLE LIMIT sub-row at the top (y392).
+    "auto_ltr":      (16, 414),
+    "auto_policy":   (250, 414),
+    "auto_eff":      (337, 414),
+    "auto_exp":      (384, 414),
+    "auto_csl":      (573, 393),
 
-    # MOTOR TRUCK CARGO row — clean band below Workers Comp, above Description
-    "cargo_ltr":     (16, 540),
-    "cargo_label":   (54, 540),
-    "cargo_policy":  (250, 540),
-    "cargo_eff":     (337, 540),
-    "cargo_exp":     (384, 540),
-    "cargo_ded":     (452, 540),
-    "cargo_limit":   (560, 540),
+    # MOTOR TRUCK CARGO band runs y528-564; data centered at y546
+    "cargo_ltr":     (16, 546),
+    "cargo_label":   (54, 546),
+    "cargo_policy":  (250, 546),
+    "cargo_eff":     (337, 546),
+    "cargo_exp":     (384, 546),
+    "cargo_ded":     (452, 546),
+    "cargo_limit":   (560, 546),
 
     # DESCRIPTION OF OPERATIONS (label y566.6)
     "desc1": (24, 580), "desc2": (24, 589), "desc3": (24, 598),
@@ -72,6 +73,38 @@ def _put_right(page, x_right, y, text, size=SIZE):
         return
     w = fitz.get_text_length(str(text), fontname=FONT, fontsize=size)
     page.insert_text((x_right - w, y), str(text), fontname=FONT, fontsize=size, color=INK)
+
+
+def _put_center(page, x_center, y, text, size=SIZE):
+    """Center text horizontally on x_center."""
+    if text is None or str(text).strip() == "":
+        return
+    w = fitz.get_text_length(str(text), fontname=FONT, fontsize=size)
+    page.insert_text((x_center - w / 2, y), str(text), fontname=FONT, fontsize=size, color=INK)
+
+
+# Coverage-table column centers (measured from the grid lines)
+COL = {"ltr": 27.0, "policy": 271.8, "eff": 354.6, "exp": 401.4}
+LIMIT_RIGHT = 592.0          # right edge for all limit values
+# Vertical center of each coverage band (from the horizontal grid lines)
+BAND_Y = {"gl": 342.0, "auto": 414.0, "cargo": 546.0}
+# General-liability limit sub-rows: (display, value-baseline y, accepted keys)
+GL_LIMITS = [
+    ("EACH OCCURRENCE", 311.2, ["each_occurrence", "EACH OCCURRENCE", "each occurrence", "occurrence"]),
+    ("DAMAGE TO RENTED", 323.2, ["damage_rented", "DAMAGE TO RENTED PREMISES", "rented premises", "damage"]),
+    ("MED EXP", 335.2, ["med_exp", "MED EXP", "med exp"]),
+    ("PERSONAL & ADV", 347.2, ["personal_adv", "PERSONAL & ADV INJURY", "personal", "adv injury"]),
+    ("GENERAL AGGREGATE", 359.2, ["general_aggregate", "GENERAL AGGREGATE", "aggregate"]),
+    ("PRODUCTS COMP/OP", 371.2, ["products_comp_op", "PRODUCTS COMP/OP AGG", "products", "comp/op"]),
+]
+
+
+def _fill_policy_row(page, y, letter, policy, eff, exp):
+    """Place INSR LTR, policy number, eff and exp centered in their columns at row y."""
+    _put_center(page, COL["ltr"], y, letter)
+    _put_center(page, COL["policy"], y, policy)
+    _put_center(page, COL["eff"], y, eff)
+    _put_center(page, COL["exp"], y, exp)
 
 
 def _put(page, coords, key, text, size=SIZE):
@@ -142,38 +175,56 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         naic = next((c.get("naic") for c in carriers if c.get("carrier") == name and c.get("naic")), None)
         _put(page, C, f"naic_{k}", naic)
 
+    # ---- COMMERCIAL GENERAL LIABILITY ----
+    gl = next((c for c in carriers if "general" in str(c.get("line", "")).lower()
+               or str(c.get("line", "")).lower() in ("gl", "cgl")), None)
+    if gl:
+        _fill_policy_row(page, BAND_Y["gl"], letter_for.get(gl.get("carrier"), ""),
+                         gl.get("policy_number"), gl.get("eff"), gl.get("exp"))
+        lim = gl.get("limits") or {}
+        lim_lc = {str(k).lower(): v for k, v in lim.items()}
+        for _label, ry, keys in GL_LIMITS:
+            val = None
+            for k in keys:
+                if k in lim:
+                    val = lim[k]; break
+                if k.lower() in lim_lc:
+                    val = lim_lc[k.lower()]; break
+            if val is not None:
+                _put_right(page, LIMIT_RIGHT, ry, _money(val))
+
+    # ---- AUTOMOBILE LIABILITY ----
     auto = next((c for c in carriers if "auto" in str(c.get("line", "")).lower()), None)
     if auto:
-        _put(page, C, "auto_ltr", letter_for.get(auto.get("carrier"), ""))
-        _put(page, C, "auto_policy", auto.get("policy_number"))
-        _put(page, C, "auto_eff", auto.get("eff"))
-        _put(page, C, "auto_exp", auto.get("exp"))
+        _fill_policy_row(page, BAND_Y["auto"], letter_for.get(auto.get("carrier"), ""),
+                         auto.get("policy_number"), auto.get("eff"), auto.get("exp"))
         lim = auto.get("limits") or {}
         csl = lim.get("CSL") or next(iter(lim.values()), None)
         if csl is not None:
-            _put_right(page, 593, C["auto_csl"][1], _money(csl))
+            _put_right(page, LIMIT_RIGHT, C["auto_csl"][1], _money(csl))
 
+    # ---- MOTOR TRUCK CARGO ----
     cargo = next((c for c in carriers if "cargo" in str(c.get("line", "")).lower()), None)
     if cargo:
-        _put(page, C, "cargo_ltr", letter_for.get(cargo.get("carrier"), ""))
+        _put_center(page, COL["ltr"], BAND_Y["cargo"], letter_for.get(cargo.get("carrier"), ""))
         _put(page, C, "cargo_label", "MOTOR TRUCK CARGO", SIZE_BLOCK)
-        _put(page, C, "cargo_policy", cargo.get("policy_number"))
-        _put(page, C, "cargo_eff", cargo.get("eff"))
-        _put(page, C, "cargo_exp", cargo.get("exp"))
+        _put_center(page, COL["policy"], BAND_Y["cargo"], cargo.get("policy_number"))
+        _put_center(page, COL["eff"], BAND_Y["cargo"], cargo.get("eff"))
+        _put_center(page, COL["exp"], BAND_Y["cargo"], cargo.get("exp"))
         ded = cargo.get("deductible")
         if ded is not None:
-            _put_right(page, 548, C["cargo_ded"][1], f"${_money(ded)} Ded")
+            _put_right(page, 548, BAND_Y["cargo"], f"${_money(ded)} Ded")
         lim = cargo.get("limits") or {}
         amt = next(iter(lim.values()), None)
         if amt is not None:
-            _put_right(page, 593, C["cargo_limit"][1], f"${_money(amt)}")
+            _put_right(page, LIMIT_RIGHT, BAND_Y["cargo"], f"${_money(amt)}")
 
     # description: ops + any other coverages + stamp
     desc = []
     if content.description_of_operations:
         desc.append(content.description_of_operations.strip())
     for c in carriers:
-        if c is auto or c is cargo:
+        if c is auto or c is cargo or c is gl:
             continue
         lim = c.get("limits") or {}
         amt = next(iter(lim.values()), None)
@@ -295,6 +346,11 @@ if __name__ == "__main__":
         holder_address="1006 WEST CENTENNIAL ROAD\nPAPILLION, NE 68046",
         description_of_operations="Motor carrier hauling general freight.",
         coverages=[
+            {"line": "Commercial General Liability", "carrier": "Progressive Mountain Insurance Company",
+             "policy_number": "864728807", "eff": "10/22/2025", "exp": "10/22/2026",
+             "limits": {"EACH OCCURRENCE": 1000000, "DAMAGE TO RENTED PREMISES": 100000,
+                        "MED EXP": 5000, "PERSONAL & ADV INJURY": 1000000,
+                        "GENERAL AGGREGATE": 2000000, "PRODUCTS COMP/OP AGG": 2000000}, "naic": "35190"},
             {"line": "Auto Liability", "carrier": "Progressive Mountain Insurance Company",
              "policy_number": "864728807", "eff": "10/22/2025", "exp": "10/22/2026",
              "limits": {"CSL": 1000000}, "naic": "35190"},
