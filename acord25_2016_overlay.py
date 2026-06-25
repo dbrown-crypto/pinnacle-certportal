@@ -24,6 +24,21 @@ SIZE = 7.0
 SIZE_BLOCK = 8.0
 INK = (0.0, 0.0, 0.0)
 
+# Producer e-mail printed when the producer block omits one (shared COI inbox).
+PRODUCER_EMAIL_FALLBACK = "certs@pinnacleriskad.com"
+
+# Authoritative NAIC for Pinnacle's appointed carriers, keyed by normalized
+# carrier name. Corrects wrong/missing seed data on OUTPUT so a cert never ships
+# a bad NAIC for a core carrier. NAIC must match the issuing entity on the dec
+# page; Progressive writes GA commercial auto under several entities, so only
+# exact-named entities are mapped here (extend as appointments are added).
+CARRIER_NAIC = {
+    "progressive mountain": "35190",
+    "progressive mountain insurance company": "35190",
+    "canal insurance": "10464",
+    "canal insurance company": "10464",
+}
+
 # ACORD 25 (2016/03) coordinates — PDF points, y from TOP. Page 612 x 792.
 C25 = {
     "date":          (512, 44),
@@ -125,6 +140,12 @@ def _check(page, key, size=9.0):
                      fontname=FONT, fontsize=size, color=INK)
 
 
+def _naic_for(carrier_name, provided):
+    """Authoritative NAIC for a known appointed carrier (corrects wrong/missing
+    seed data), else the value provided in the policy data."""
+    return CARRIER_NAIC.get(str(carrier_name or "").strip().lower(), provided)
+
+
 def _expand_year(d):
     """Display 2-digit years as 4 digits ('01/01/26' -> '01/01/2026').
     Leaves 4-digit years and any non-MM/DD/YY value untouched (no corruption)."""
@@ -181,7 +202,8 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         _put(page, C, f"producer_l{i+1}", ln, SIZE_BLOCK if i == 0 else SIZE)
 
     import re
-    email = next((w for ln in plines for w in ln.replace(",", " ").split() if "@" in w), None)
+    email = next((w for ln in plines for w in ln.replace(",", " ").split() if "@" in w), None) \
+        or PRODUCER_EMAIL_FALLBACK
     phone = None
     for ln in plines:
         m = re.search(r"\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}", ln)
@@ -211,7 +233,7 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         k = letter.lower()
         _put(page, C, f"insurer_{k}", name)
         naic = next((c.get("naic") for c in carriers if c.get("carrier") == name and c.get("naic")), None)
-        _put(page, C, f"naic_{k}", naic)
+        _put(page, C, f"naic_{k}", _naic_for(name, naic))
 
     # ---- COMMERCIAL GENERAL LIABILITY ----
     gl = next((c for c in carriers if "general" in str(c.get("line", "")).lower()
