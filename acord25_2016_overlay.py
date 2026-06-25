@@ -15,6 +15,7 @@ the ACORD 101 page.
 from __future__ import annotations
 
 import io
+import os
 from typing import Optional
 
 import fitz  # PyMuPDF
@@ -38,6 +39,15 @@ CARRIER_NAIC = {
     "canal insurance": "10464",
     "canal insurance company": "10464",
 }
+
+# AUTHORIZED REPRESENTATIVE signature. If no signature image is passed explicitly,
+# the module looks for `pinnacle_signature.png` next to this file (commit it to the
+# repo root) and stamps it on the signature line. If that file is absent too, it
+# falls back to printing "Derrick Brown" as text. SIGNATURE_RECT was measured to
+# sit just above the auth-rep line (page 1), clearing the cancellation text above.
+DEFAULT_SIGNATURE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "pinnacle_signature.png")
+SIGNATURE_RECT = (415.0, 694.0, 560.0, 708.0)
 
 # ACORD 25 (2016/03) coordinates — PDF points, y from TOP. Page 612 x 792.
 C25 = {
@@ -138,6 +148,26 @@ def _check(page, key, size=9.0):
     w = fitz.get_text_length("X", fontname=FONT, fontsize=size)
     page.insert_text((cx - w / 2, cy + size * 0.35), "X",
                      fontname=FONT, fontsize=size, color=INK)
+
+
+def _resolve_signature(signature_png_path):
+    """Find the signature image. Order: explicit arg, then pinnacle_signature.png
+    next to this module, then in the current working directory. Returns a path or
+    None. If nothing is found, logs WHERE it looked to stderr so a missing image
+    shows up in the Render logs instead of silently falling back to text."""
+    import sys
+    if signature_png_path and os.path.exists(signature_png_path):
+        return signature_png_path
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, "pinnacle_signature.png"),
+                  os.path.join(os.getcwd(), "pinnacle_signature.png")]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    print("[acord25] signature image NOT found; checked: "
+          + "; ".join(candidates) + " -- falling back to text.", file=sys.stderr)
+    return None
+
 
 
 def _naic_for(carrier_name, provided):
@@ -328,8 +358,12 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     for i, ln in enumerate(_lines(content.holder_address, 2)):
         _put(page, C, f"holder_l{i+2}", ln)
 
-    if signature_png_path and signature_rect:
-        page.insert_image(fitz.Rect(*signature_rect), filename=signature_png_path)
+    # Signature: explicit arg > pinnacle_signature.png (next to module or CWD)
+    # > text fallback. Resolver logs to stderr if the image can't be found.
+    sig_path = _resolve_signature(signature_png_path)
+    if sig_path:
+        page.insert_image(fitz.Rect(*(signature_rect or SIGNATURE_RECT)),
+                          filename=sig_path, keep_proportion=True)
     else:
         _put(page, C, "auth_rep", "Derrick Brown", SIZE_BLOCK)
 
