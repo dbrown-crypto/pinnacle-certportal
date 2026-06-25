@@ -1,0 +1,22 @@
+# Environment / secrets — NEVER commit these
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.swp
