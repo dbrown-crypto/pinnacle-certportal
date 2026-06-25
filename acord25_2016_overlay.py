@@ -98,6 +98,44 @@ GL_LIMITS = [
     ("PRODUCTS COMP/OP", 371.2, ["products_comp_op", "PRODUCTS COMP/OP AGG", "products", "comp/op"]),
 ]
 
+# CHECKBOX square CENTERS (PDF points, y from top), measured off the ACORD 25
+# (2016/03) form squares (each ~14x12pt). An "X" is drawn centered in the named
+# box. GL OCCUR + aggregate POLICY default ON when a GL line is present; the
+# auto-type boxes are marked ONLY from the carrier's `autos` list, never guessed
+# (a cert must not imply coverage the policy doesn't actually grant — E&O).
+CHECKBOX = {
+    "gl_claims_made": (57.6, 318.0),
+    "gl_occur":       (122.4, 318.0),
+    "gl_agg_policy":  (43.2, 366.0),
+    "gl_agg_project": (86.4, 366.0),
+    "gl_agg_loc":     (129.6, 366.0),
+    "auto_any":       (43.2, 402.0),
+    "auto_owned":     (43.2, 414.0),
+    "auto_hired":     (43.2, 426.0),
+    "auto_scheduled": (111.6, 414.0),
+    "auto_non_owned": (111.6, 426.0),
+}
+
+
+def _check(page, key, size=9.0):
+    """Mark a CHECKBOX square: draw an X centered in box `key`."""
+    cx, cy = CHECKBOX[key]
+    w = fitz.get_text_length("X", fontname=FONT, fontsize=size)
+    page.insert_text((cx - w / 2, cy + size * 0.35), "X",
+                     fontname=FONT, fontsize=size, color=INK)
+
+
+def _expand_year(d):
+    """Display 2-digit years as 4 digits ('01/01/26' -> '01/01/2026').
+    Leaves 4-digit years and any non-MM/DD/YY value untouched (no corruption)."""
+    if not d:
+        return d
+    parts = str(d).strip().split("/")
+    if len(parts) == 3 and len(parts[2]) == 2 and parts[2].isdigit():
+        parts[2] = "20" + parts[2]
+        return "/".join(parts)
+    return str(d)
+
 
 def _fill_policy_row(page, y, letter, policy, eff, exp):
     """Place INSR LTR, policy number, eff and exp centered in their columns at row y."""
@@ -180,7 +218,15 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
                or str(c.get("line", "")).lower() in ("gl", "cgl")), None)
     if gl:
         _fill_policy_row(page, BAND_Y["gl"], letter_for.get(gl.get("carrier"), ""),
-                         gl.get("policy_number"), gl.get("eff"), gl.get("exp"))
+                         gl.get("policy_number"),
+                         _expand_year(gl.get("eff")), _expand_year(gl.get("exp")))
+        # Coverage-form box: OCCUR is the trucking default; CLAIMS-MADE only when
+        # the data declares it. GEN'L AGGREGATE APPLIES PER: POLICY default,
+        # override to PROJECT/LOC. Data-driven so the form basis isn't misstated.
+        _check(page, "gl_claims_made"
+               if str(gl.get("form", "")).strip().upper() == "CLAIMS-MADE" else "gl_occur")
+        _agg = str(gl.get("aggregate", "")).strip().upper()
+        _check(page, {"PROJECT": "gl_agg_project", "LOC": "gl_agg_loc"}.get(_agg, "gl_agg_policy"))
         lim = gl.get("limits") or {}
         lim_lc = {str(k).lower(): v for k, v in lim.items()}
         for _label, ry, keys in GL_LIMITS:
@@ -197,7 +243,20 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     auto = next((c for c in carriers if "auto" in str(c.get("line", "")).lower()), None)
     if auto:
         _fill_policy_row(page, BAND_Y["auto"], letter_for.get(auto.get("carrier"), ""),
-                         auto.get("policy_number"), auto.get("eff"), auto.get("exp"))
+                         auto.get("policy_number"),
+                         _expand_year(auto.get("eff")), _expand_year(auto.get("exp")))
+        # Auto-type boxes come from `autos`. DEFAULT is SCHEDULED only, since most
+        # of the book writes scheduled autos. Pass an explicit `autos` list to
+        # override per policy, e.g. ["ANY"] or ["HIRED","NON-OWNED"]. The default
+        # will be WRONG for any policy that isn't scheduled-auto, so set `autos`
+        # from the dec page whenever it differs (a misstated symbol is E&O).
+        _auto_box = {"ANY": "auto_any", "OWNED": "auto_owned", "HIRED": "auto_hired",
+                     "SCHEDULED": "auto_scheduled", "NON-OWNED": "auto_non_owned"}
+        _autos = auto.get("autos") or ["SCHEDULED"]
+        for _a in _autos:
+            _k = _auto_box.get(str(_a).strip().upper())
+            if _k:
+                _check(page, _k)
         lim = auto.get("limits") or {}
         csl = lim.get("CSL") or next(iter(lim.values()), None)
         if csl is not None:
@@ -209,8 +268,8 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         _put_center(page, COL["ltr"], BAND_Y["cargo"], letter_for.get(cargo.get("carrier"), ""))
         _put(page, C, "cargo_label", "MOTOR TRUCK CARGO", SIZE_BLOCK)
         _put_center(page, COL["policy"], BAND_Y["cargo"], cargo.get("policy_number"))
-        _put_center(page, COL["eff"], BAND_Y["cargo"], cargo.get("eff"))
-        _put_center(page, COL["exp"], BAND_Y["cargo"], cargo.get("exp"))
+        _put_center(page, COL["eff"], BAND_Y["cargo"], _expand_year(cargo.get("eff")))
+        _put_center(page, COL["exp"], BAND_Y["cargo"], _expand_year(cargo.get("exp")))
         # Limit and deductible stack on two baselines, both right-aligned to
         # LIMIT_RIGHT. On this free-form OTHER row the LIMITS column divider
         # sits at x~514.8; the old code placed the deductible right-aligned to
