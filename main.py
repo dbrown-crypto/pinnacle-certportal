@@ -26,6 +26,8 @@ Env:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET,
 from __future__ import annotations
 
 import os
+import secrets
+import string
 import base64
 import datetime as dt
 from typing import Optional
@@ -351,6 +353,17 @@ async def sb_patch(table: str, match: dict, patch: dict) -> list:
         return r.json()
 
 
+async def sb_upsert(table: str, row: dict) -> dict:
+    """POST with merge-duplicates preference — idempotent insert/update."""
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(url, headers={**_sb_headers(),
+                                       "Prefer": "resolution=merge-duplicates,return=representation"},
+                         json=row)
+        r.raise_for_status()
+        return r.json()[0]
+
+
 class PolicyUpsert(BaseModel):
     id: Optional[str] = None
     client_id: str
@@ -423,6 +436,69 @@ async def admin_audit(authorization: Optional[str] = Header(None)):
 async def admin_certs(authorization: Optional[str] = Header(None)):
     require_admin(authorization)
     return await sb_get("issued_certificates", {"select": "*", "order": "issued_at.desc", "limit": "200"})
+
+
+# --- manual customer creation -----------------------------------------------
+class CustomerCreate(BaseModel):
+    email: str
+    insured_name: str
+
+
+@app.post("/admin/customers")
+async def admin_create_customer(
+        body: CustomerCreate,
+        authorization: Optional[str] = Header(None),
+):
+    require_admin(authorization)
+    email = body.email.strip().lower()
+    name = body.insured_name.strip()
+
+    # Generate strong temp password — never logged
+    alphabet = string.ascii_letters + string.digits
+    temp_password = "".join(secrets.choice(alphabet) for _ in range(16))
+
+    gt_url = f"{SUPABASE_URL}/auth/v1/admin/users"
+    uid: str
+
+    async with httpx.AsyncClient(timeout=30) as c:
+        # --- create auth user via GoTrue admin API ---
+        create_resp = await c.post(
+            gt_url,
+            headers=_sb_headers(),
+            json={
+                "email": email,
+                "password": temp_password,
+                "email_confirm": True,
+                "user_metadata": {"insured_name": name},
+            },
+        )
+
+        if create_resp.status_code == 422:
+            # User already exists — look them up and reset password
+            list_resp = await c.get(gt_url, headers=_sb_headers())
+            list_resp.raise_for_status()
+            users_data = list_resp.json()
+            # GoTrue may return a dict with "users" key or a plain list
+            users_list = users_data.get("users", users_data) if isinstance(users_data, dict) else users_data
+            match = next((u for u in users_list if u.get("email") == email), None)
+            if match is None:
+                raise HTTPException(422, f"User lookup failed for {email}")
+            uid = match["id"]
+            # Reset password
+            pw_resp = await c.put(
+                f"{gt_url}/{uid}",
+                headers=_sb_headers(),
+                json={"password": temp_password},
+            )
+            pw_resp.raise_for_status()
+        else:
+            create_resp.raise_for_status()
+            uid = create_resp.json()["id"]
+
+    # Upsert clients row — id MUST equal auth user UUID
+    await sb_upsert("clients", {"id": uid, "insured_name": name, "email": email})
+
+    return {"client_id": uid, "email": email, "temp_password": temp_password}
 
 
 def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
