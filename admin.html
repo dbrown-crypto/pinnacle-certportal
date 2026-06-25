@@ -68,7 +68,17 @@
 
     <!-- POLICIES -->
     <div class="panel show" id="p-policies">
-      <div class="card">
+      <div class="card" id="newCustomerCard">
+        <strong>New customer</strong>
+        <div class="muted" style="margin-bottom:10px">Creates an auth user + clients row. Deliver the temp password out-of-band and tell them to change it immediately.</div>
+        <div class="grid" style="margin-top:8px">
+          <div><label>Login email</label><input id="nc_email" type="email" placeholder="customer@example.com"/></div>
+          <div><label>Named insured</label><input id="nc_name" placeholder="Acme Trucking LLC"/></div>
+        </div>
+        <button class="act b-gold" id="nc_submit" style="margin-top:10px">Create customer</button>
+        <div id="nc_result" style="margin-top:10px"></div>
+      </div>
+            <div class="card">
         <strong>Add / edit a policy</strong>
         <div class="muted">Keyed by hand — this is the source of truth the portal reads. Keep <em>data current as of</em> honest.</div>
         <div class="grid" style="margin-top:10px">
@@ -83,7 +93,7 @@
         </div>
         <label>Producer block (prints on cert)</label><textarea id="f_producer">Pinnacle Risk Advisors LLC
 2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339
-(943) 239-3439  dbrown@pinnacleriskad.com</textarea>
+(943) 239-3439  certs@pinnacleriskad.com</textarea>
         <label>Coverages (JSON: line → limit)</label><input id="f_cov" value='{"auto_liability":1000000,"cargo":100000}'/>
         <label>Carriers (JSON array for cert table)</label><textarea id="f_carriers">[{"line":"Auto Liability","carrier":"Progressive Mountain","policy_number":"","eff":"","exp":"","limits":{"CSL":1000000}}]</textarea>
         <input id="f_id" type="hidden"/>
@@ -220,6 +230,27 @@ async function loadAudit(){
       <td class="muted">${(r.audit_codes||[]).join(", ")}</td></tr>`).join("") ||
       "<tr><td class='muted'>No activity yet.</td></tr>";
 }
+
+$("nc_submit").onclick = async () => {
+  const emailVal = $("nc_email").value.trim();
+  const nameVal = $("nc_name").value.trim();
+  if (!emailVal || !nameVal) { $("nc_result").innerHTML = '<span class="err">Email and name are required.</span>'; return; }
+  $("nc_result").textContent = "Creating…";
+  try {
+    const data = await api("/admin/customers", {
+      method: "POST",
+      body: JSON.stringify({ email: emailVal, insured_name: nameVal })
+    });
+    $("nc_result").innerHTML =
+      '<strong>Customer created.</strong><br>' +
+      'Client ID: <code>' + esc(data.client_id) + '</code><br>' +
+      'Temp password: <code>' + esc(data.temp_password) + '</code><br>' +
+      '<span class="muted">Deliver password out-of-band and ask customer to change it on first login.</span>';
+    // Auto-fill the policy form
+    $("f_client").value = data.client_id;
+    $("f_insured").value = esc(nameVal);
+  } catch(e) { $("nc_result").innerHTML = '<span class="err">Error: ' + e.message + '</span>'; }
+};
 
 // keep session across refresh
 sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.access_token; boot(); }});
