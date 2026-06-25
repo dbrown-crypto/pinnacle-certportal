@@ -88,33 +88,73 @@ const CUSTOMERS = {
     },
   },
 
-  // ---------------------------------------------------------------------------
-  // 40GRAND STUB — fill in when policy is bound, then run:
-  //   node enroll_customer.mjs 40grand --dry-run
-  // ---------------------------------------------------------------------------
-  // '40grand': {
-  //   login_email: 'CONTACT@EMAIL.com',
-  //   client: {
-  //     insured_name: '40Grand Logistics LLC',
-  //     email:        'CONTACT@EMAIL.com',
-  //   },
-  //   policy: {
-  //     named_insured:      '40Grand Logistics LLC',
-  //     insured_address:    'ADDRESS',
-  //     usdot:              'USDOT',
-  //     mc_number:          'MC',
-  //     status:             'active',
-  //     self_serve_enabled: true,
-  //     effective_date:     'YYYY-MM-DD',
-  //     expiration_date:    'YYYY-MM-DD',
-  //     data_current_as_of: TODAY,
-  //     producer_block:     'Pinnacle Risk Advisors LLC\n2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339\n(943) 239-3439  certs@pinnacleriskad.com',
-  //     coverages: { auto_liability: 0, general_liability: 0, cargo: 0 },
-  //     carriers:  [],
-  //     drivers:   [],
-  //     trailers:  [],
-  //   },
-  // },
+  // Two-insurer account: National Indemnity (auto+cargo) = Insurer A,
+  // USLI (GL) = Insurer B. Carriers ordered NICO-first so letters assign A=NICO, B=USLI.
+  fortygrand: {
+    login_email: '40grandlogistic@gmail.com',
+    client: {
+      insured_name: '40Grand Logistics LLC',
+      email:        '40grandlogistic@gmail.com',
+    },
+    policy: {
+      named_insured:      '40Grand Logistics LLC',
+      insured_address:    '5190 Erin Rd SW, Atlanta, GA 30331',
+      usdot:              '3616110',
+      mc_number:          '1233511',
+      status:             'active',
+      self_serve_enabled: true,
+      effective_date:     '2026-06-22',
+      expiration_date:    '2027-06-22',
+      data_current_as_of: TODAY,
+      producer_block:     PRODUCER_BLOCK,
+      coverages: {
+        auto_liability:    1000000,
+        general_liability: 1000000,
+        cargo:             100000,
+      },
+      carriers: [
+        {
+          eff: '06/22/26', exp: '06/22/27',
+          line: 'Auto Liability',
+          naic: '20087',
+          autos: ['SCHEDULED'],
+          limits: { CSL: 1000000 },
+          carrier: 'National Indemnity Company',
+          policy_number: '70TRS137347',
+        },
+        {
+          eff: '06/22/26', exp: '06/22/27',
+          line: 'Motor Truck Cargo',
+          naic: '20087',
+          limits: { Limit: 100000 },
+          deductible: 1000,
+          carrier: 'National Indemnity Company',
+          policy_number: '70TRS137347',
+        },
+        {
+          eff: '06/23/26', exp: '06/23/27',
+          line: 'Commercial General Liability',
+          naic: '25895',
+          limits: {
+            'EACH OCCURRENCE':          1000000,
+            'GENERAL AGGREGATE':        2000000,
+            'DAMAGE TO RENTED PREMISES': 100000,
+            'MED EXP':                    5000,
+            'PERSONAL & ADV INJURY':    1000000,
+            'PRODUCTS COMP/OP AGG':     1000000,
+          },
+          carrier: 'United States Liability Insurance Company',
+          policy_number: 'GL1347897',
+        },
+      ],
+      drivers: [
+        { last: 'MONTGOMERY', first: 'MARK', lic_state: 'GA' },
+      ],
+      trailers: [
+        { vin: '1FVACWDT7CHBP9749', value: 25000, description: '2012 Freightliner M2' },
+      ],
+    },
+  },
 
 };
 
