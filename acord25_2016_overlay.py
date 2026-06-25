@@ -43,11 +43,12 @@ CARRIER_NAIC = {
 # AUTHORIZED REPRESENTATIVE signature. If no signature image is passed explicitly,
 # the module looks for `pinnacle_signature.png` next to this file (commit it to the
 # repo root) and stamps it on the signature line. If that file is absent too, it
-# falls back to printing "Derrick Brown" as text. SIGNATURE_RECT was measured to
-# sit just above the auth-rep line (page 1), clearing the cancellation text above.
+# falls back to printing "Derrick Brown" as text. SIGNATURE_RECT is centered on the
+# auth-rep / CANCELLATION cell (walls x=306 and x=594, so center x=450) and sits
+# just above the signature line at y=708. fitz centers the image within the rect.
 DEFAULT_SIGNATURE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                       "pinnacle_signature.png")
-SIGNATURE_RECT = (415.0, 694.0, 560.0, 708.0)
+SIGNATURE_RECT = (377.0, 694.0, 522.0, 708.0)
 
 # ACORD 25 (2016/03) coordinates — PDF points, y from TOP. Page 612 x 792.
 C25 = {
