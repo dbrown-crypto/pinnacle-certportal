@@ -103,8 +103,38 @@ def _fill_policy_row(page, y, letter, policy, eff, exp):
     """Place INSR LTR, policy number, eff and exp centered in their columns at row y."""
     _put_center(page, COL["ltr"], y, letter)
     _put_center(page, COL["policy"], y, policy)
-    _put_center(page, COL["eff"], y, eff)
-    _put_center(page, COL["exp"], y, exp)
+    _put_center(page, COL["eff"], y, _date4(eff))
+    _put_center(page, COL["exp"], y, _date4(exp))
+
+
+def _date4(s):
+    """Expand a 2-digit year to 4 digits: 01/01/26 -> 01/01/2026. Leaves other formats alone."""
+    if not s:
+        return s
+    parts = str(s).split("/")
+    if len(parts) == 3 and len(parts[2]) == 2 and parts[2].isdigit():
+        parts[2] = "20" + parts[2]
+        return "/".join(parts)
+    return str(s)
+
+
+# Checkbox centers (x, y) measured from the form grid
+CHECKBOX = {
+    "gl_occur":    (123.0, 318.5),
+    "agg_policy":  (40.5, 365.8),
+    "agg_project": (84.0, 365.8),
+    "agg_loc":     (126.5, 365.8),
+    "any_auto":    (40.5, 400.8),
+    "owned":       (40.5, 414.0),
+    "hired":       (40.5, 427.0),
+    "scheduled":   (107.0, 414.0),
+    "non_owned":   (107.0, 427.0),
+}
+
+
+def _check(page, key):
+    cx, cy = CHECKBOX[key]
+    _put_center(page, cx, cy + 3.0, "X", size=8)
 
 
 def _put(page, coords, key, text, size=SIZE):
@@ -181,6 +211,16 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     if gl:
         _fill_policy_row(page, BAND_Y["gl"], letter_for.get(gl.get("carrier"), ""),
                          gl.get("policy_number"), gl.get("eff"), gl.get("exp"))
+        # OCCUR vs CLAIMS-MADE (default OCCUR); aggregate applies-per (default POLICY)
+        if "CLAIM" not in str(gl.get("form", "OCCUR")).upper():
+            _check(page, "gl_occur")
+        agg = str(gl.get("aggregate", "POLICY")).upper()
+        if agg.startswith("PROJ"):
+            _check(page, "agg_project")
+        elif agg == "LOC":
+            _check(page, "agg_loc")
+        else:
+            _check(page, "agg_policy")
         lim = gl.get("limits") or {}
         lim_lc = {str(k).lower(): v for k, v in lim.items()}
         for _label, ry, keys in GL_LIMITS:
@@ -198,6 +238,20 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     if auto:
         _fill_policy_row(page, BAND_Y["auto"], letter_for.get(auto.get("carrier"), ""),
                          auto.get("policy_number"), auto.get("eff"), auto.get("exp"))
+        # Auto-type boxes are data-driven (must reflect the actual policy): a list
+        # like ["SCHEDULED","HIRED","NON-OWNED"] or ["ANY"]. Nothing marked if absent.
+        for a in (auto.get("autos") or []):
+            s = str(a).upper()
+            if "ANY" in s:
+                _check(page, "any_auto")
+            elif "SCHED" in s:
+                _check(page, "scheduled")
+            elif "NON" in s:
+                _check(page, "non_owned")
+            elif "HIRED" in s:
+                _check(page, "hired")
+            elif "OWN" in s:
+                _check(page, "owned")
         lim = auto.get("limits") or {}
         csl = lim.get("CSL") or next(iter(lim.values()), None)
         if csl is not None:
@@ -209,8 +263,8 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         _put_center(page, COL["ltr"], BAND_Y["cargo"], letter_for.get(cargo.get("carrier"), ""))
         _put(page, C, "cargo_label", "MOTOR TRUCK CARGO", SIZE_BLOCK)
         _put_center(page, COL["policy"], BAND_Y["cargo"], cargo.get("policy_number"))
-        _put_center(page, COL["eff"], BAND_Y["cargo"], cargo.get("eff"))
-        _put_center(page, COL["exp"], BAND_Y["cargo"], cargo.get("exp"))
+        _put_center(page, COL["eff"], BAND_Y["cargo"], _date4(cargo.get("eff")))
+        _put_center(page, COL["exp"], BAND_Y["cargo"], _date4(cargo.get("exp")))
         ded = cargo.get("deductible")
         if ded is not None:
             _put_right(page, 548, BAND_Y["cargo"], f"${_money(ded)} Ded")
@@ -347,16 +401,16 @@ if __name__ == "__main__":
         description_of_operations="Motor carrier hauling general freight.",
         coverages=[
             {"line": "Commercial General Liability", "carrier": "Progressive Mountain Insurance Company",
-             "policy_number": "864728807", "eff": "10/22/2025", "exp": "10/22/2026",
+             "policy_number": "864728807", "eff": "10/22/25", "exp": "10/22/26",
              "limits": {"EACH OCCURRENCE": 1000000, "DAMAGE TO RENTED PREMISES": 100000,
                         "MED EXP": 5000, "PERSONAL & ADV INJURY": 1000000,
                         "GENERAL AGGREGATE": 2000000, "PRODUCTS COMP/OP AGG": 2000000}, "naic": "35190"},
             {"line": "Auto Liability", "carrier": "Progressive Mountain Insurance Company",
-             "policy_number": "864728807", "eff": "10/22/2025", "exp": "10/22/2026",
-             "limits": {"CSL": 1000000}, "naic": "35190"},
-            {"line": "Motor Truck Cargo", "carrier": "Progressive Mountain Insurance Company",
-             "policy_number": "864728807", "eff": "10/22/2025", "exp": "10/22/2026",
-             "limits": {"Limit": 100000}, "deductible": 1000},
+             "policy_number": "864728807", "eff": "10/22/25", "exp": "10/22/26",
+             "limits": {"CSL": 1000000}, "naic": "35190", "autos": ["SCHEDULED", "HIRED", "NON-OWNED"]},
+            {"line": "Motor Truck Cargo", "carrier": "Canal Insurance Company",
+             "policy_number": "864728807", "eff": "10/22/25", "exp": "10/22/26",
+             "limits": {"Limit": 100000}, "deductible": 1000, "naic": "11142"},
         ],
         data_current_as_of=date(2026, 6, 24),
         usdot="4428067", mc_number="1741911",
