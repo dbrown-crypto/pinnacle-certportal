@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -126,6 +126,18 @@
           <label>Coverages JSON</label><input id="f_cov" placeholder='{"auto_liability":1000000}'/>
           <label>Carriers JSON</label><textarea id="f_carriers" rows="4" placeholder='[{"line":"Auto Liability",...}]'></textarea>
         </div>
+ 
+        <!-- Vehicles / Trailers (maps to policies.trailers — drives the ACORD 101 VIN schedule) -->
+        <label style="font-weight:600;margin:14px 0 4px;display:block">Vehicles / Trailers</label>
+        <div class="muted" style="font-size:11px;margin-bottom:6px">Power units and trailers. Stated value prints next to the VIN on the cert.</div>
+        <div id="vehLines"></div>
+        <button type="button" class="act b-ghost" onclick="vehAddRow()" style="font-size:11px;margin-bottom:6px">+ Add vehicle</button>
+ 
+        <!-- Drivers (maps to policies.drivers — drives the ACORD 101 driver schedule) -->
+        <label style="font-weight:600;margin:14px 0 4px;display:block">Drivers</label>
+        <div id="drvLines"></div>
+        <button type="button" class="act b-ghost" onclick="drvAddRow()" style="font-size:11px;margin-bottom:6px">+ Add driver</button>
+ 
         <input id="f_id" type="hidden"/>
         <button class="act b-gold" id="savePolicy" style="margin-top:10px">Save policy</button>
         <button class="act b-ghost" id="clearForm">Clear</button>
@@ -318,6 +330,57 @@ function covToggleRaw() {
   btn.textContent=shown?'Edit raw JSON (advanced)':'Hide raw JSON';
 }
  
+// ---- Vehicles / Trailers + Drivers (ACORD 101 schedule) ----
+function vehRowHTML(d){
+  d=d||{}; const vid='v'+Date.now()+Math.random().toString(36).slice(2,6);
+  const known=['vin','value','description'];
+  const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
+  return `<div class="veh-row" data-extra='${JSON.stringify(extra).replace(/'/g,"&#39;")}' style="display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end">
+    <div><label style="font-size:10px">Year / Make / Description</label><input class="veh-desc" value="${esc(d.description||'')}" placeholder="2015 Kenworth T680"/></div>
+    <div><label style="font-size:10px">VIN</label><input class="veh-vin" value="${esc(d.vin||'')}" placeholder="1XKYDP8X3FJ422580"/></div>
+    <div><label style="font-size:10px">Stated value $</label><input class="veh-val" type="number" min="0" step="1" value="${d.value!=null?d.value:''}"/></div>
+    <button type="button" class="act b-stop" onclick="this.closest('.veh-row').remove()" style="font-size:11px">✕</button>
+  </div>`;
+}
+function vehAddRow(d){ document.getElementById('vehLines').insertAdjacentHTML('beforeend', vehRowHTML(d)); }
+function assembleVehicles(){
+  const out=[];
+  for(const row of document.querySelectorAll('#vehLines .veh-row')){
+    const desc=row.querySelector('.veh-desc').value.trim();
+    const vin=row.querySelector('.veh-vin').value.trim();
+    const valStr=row.querySelector('.veh-val').value.trim();
+    if(!desc && !vin && !valStr) continue; // skip blank rows
+    let extra={}; try{extra=JSON.parse(row.dataset.extra||'{}');}catch(e){}
+    const obj={...extra, vin, description:desc};
+    obj.value = valStr!=='' ? parseFloat(valStr) : 0;
+    out.push(obj);
+  }
+  return out;
+}
+function drvRowHTML(d){
+  d=d||{}; const known=['first','last','lic_state'];
+  const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
+  return `<div class="drv-row" data-extra='${JSON.stringify(extra).replace(/'/g,"&#39;")}' style="display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end">
+    <div><label style="font-size:10px">First</label><input class="drv-first" value="${esc(d.first||'')}" placeholder="FRANK"/></div>
+    <div><label style="font-size:10px">Last</label><input class="drv-last" value="${esc(d.last||'')}" placeholder="BRAXTON"/></div>
+    <div><label style="font-size:10px">Lic. state</label><input class="drv-state" maxlength="2" value="${esc(d.lic_state||'')}" placeholder="GA"/></div>
+    <button type="button" class="act b-stop" onclick="this.closest('.drv-row').remove()" style="font-size:11px">✕</button>
+  </div>`;
+}
+function drvAddRow(d){ document.getElementById('drvLines').insertAdjacentHTML('beforeend', drvRowHTML(d)); }
+function assembleDrivers(){
+  const out=[];
+  for(const row of document.querySelectorAll('#drvLines .drv-row')){
+    const first=row.querySelector('.drv-first').value.trim();
+    const last=row.querySelector('.drv-last').value.trim();
+    const st=row.querySelector('.drv-state').value.trim().toUpperCase();
+    if(!first && !last && !st) continue; // skip blank rows
+    let extra={}; try{extra=JSON.parse(row.dataset.extra||'{}');}catch(e){}
+    out.push({...extra, last, first, lic_state:st});
+  }
+  return out;
+}
+ 
 function assembleCovData() {
   const rawCov=(document.getElementById('f_cov').value||'').trim();
   const rawCar=(document.getElementById('f_carriers').value||'').trim();
@@ -391,23 +454,30 @@ window.editPolicy = (p) => {
     else if(ln.includes('motor truck cargo')) type='mtc';
     document.getElementById('covLines').insertAdjacentHTML('beforeend', buildLineHTML(type, c));
   }
+  document.getElementById('vehLines').innerHTML='';
+  for (const v of (p.trailers||[])) vehAddRow(v);
+  document.getElementById('drvLines').innerHTML='';
+  for (const d of (p.drivers||[])) drvAddRow(d);
   window.scrollTo({top:0,behavior:"smooth"});
 };
 $("clearForm").onclick=()=>{
   ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value="");
   document.getElementById('covLines').innerHTML=''; $("f_cov").value=''; $("f_carriers").value='';
+  document.getElementById('vehLines').innerHTML=''; document.getElementById('drvLines').innerHTML='';
 };
 $("savePolicy").onclick = async ()=>{
   $("polErr").textContent="";
   const {coverages, carriers, err}=assembleCovData();
   if (err){$("polErr").textContent=err; return;}
+  const trailers=assembleVehicles();
+  const drivers=assembleDrivers();
   try{
     const body={ client_id:$("f_client").value.trim(), named_insured:$("f_insured").value.trim(),
       usdot:$("f_dot").value.trim()||null, status:$("f_status").value.trim(),
       effective_date:$("f_eff").value, expiration_date:$("f_exp").value,
       producer_block:$("f_producer").value, insured_address:$("f_addr").value.trim(),
       data_current_as_of:$("f_asof").value,
-      coverages, carriers };
+      coverages, carriers, trailers, drivers };
     if($("f_id").value) body.id=$("f_id").value;
     await api("/admin/policies",{method:"POST",body:JSON.stringify(body)});
     $("clearForm").click(); await loadPolicies();
