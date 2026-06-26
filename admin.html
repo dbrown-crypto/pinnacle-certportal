@@ -41,10 +41,23 @@
   .login h2{font-family:"Playfair Display",serif;margin:0 0 14px}
   .hidden{display:none}.muted{color:var(--slate);font-size:12px}
   .err{color:var(--stop);font-size:13px;margin-top:8px}
+ 
+/* ---- Coverage Builder ---- */
+.cov-line{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:10px;background:var(--cream)}
+.cov-line-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:600;font-size:13px}
+.cov-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px}
+.cov-grid label{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--slate);margin-bottom:2px;display:block}
+.cov-grid input{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:5px;font-inherit;background:var(--cream)}
+.naic-locked{background:#f0f4ff!important;color:#555}
+.cb-group{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.cb-item{display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer}
+.lim-row{display:grid;grid-template-columns:1fr 120px 24px;gap:4px;align-items:center;margin-bottom:4px}
+.lim-row input{padding:5px 7px;border:1px solid var(--line);border-radius:5px;font-size:13px;background:var(--cream)}
+.lim-add{font-size:11px;color:var(--gold);cursor:pointer;background:none;border:none;padding:0;margin-top:2px}
 </style>
 </head>
 <body>
-
+ 
 <div id="loginView" class="login">
   <h2>Certificate Admin</h2>
   <label>Email</label><input id="aEmail" type="email"/>
@@ -52,7 +65,7 @@
   <button class="act b-navy" style="margin-top:14px;width:100%" id="aLogin">Sign in</button>
   <div id="aErr" class="err"></div>
 </div>
-
+ 
 <div id="appView" class="hidden">
   <header>
     <h1>Pinnacle — Certificate Admin</h1>
@@ -65,7 +78,7 @@
       <div class="tab" data-p="certs">Issued Certificates</div>
       <div class="tab" data-p="audit">Audit Log</div>
     </div>
-
+ 
     <!-- POLICIES -->
     <div class="panel show" id="p-policies">
       <div class="card" id="newCustomerCard">
@@ -94,8 +107,25 @@
         <label>Producer block (prints on cert)</label><textarea id="f_producer">Pinnacle Risk Advisors LLC
 2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339
 (943) 239-3439  certs@pinnacleriskad.com</textarea>
-        <label>Coverages (JSON: line → limit)</label><input id="f_cov" value='{"auto_liability":1000000,"cargo":100000}'/>
-        <label>Carriers (JSON array for cert table)</label><textarea id="f_carriers">[{"line":"Auto Liability","carrier":"Progressive Mountain","policy_number":"","eff":"","exp":"","limits":{"CSL":1000000}}]</textarea>
+        <!-- Coverage Builder -->
+        <label style="font-weight:600;margin-bottom:4px;display:block">Coverage Lines</label>
+        <div class="cov-add-btns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <button type="button" class="act b-ghost" onclick="covAddLine('al')">+ Auto Liability</button>
+          <button type="button" class="act b-ghost" onclick="covAddLine('gl')">+ General Liability</button>
+          <button type="button" class="act b-ghost" onclick="covAddLine('mtc')">+ Motor Truck Cargo</button>
+          <button type="button" class="act b-ghost" onclick="covAddLine('other')">+ Other line</button>
+        </div>
+        <div id="covLines"></div>
+        <div id="covErr" class="err" style="margin-bottom:6px"></div>
+        <!-- Raw JSON fallback -->
+        <div class="raw-toggle-row" style="margin-bottom:6px">
+          <button type="button" class="act b-ghost" id="rawToggleBtn" onclick="covToggleRaw()" style="font-size:11px">Edit raw JSON (advanced)</button>
+        </div>
+        <div id="rawSection" style="display:none">
+          <label class="muted" style="font-size:11px">Raw override — if non-empty these override the builder on save</label>
+          <label>Coverages JSON</label><input id="f_cov" placeholder='{"auto_liability":1000000}'/>
+          <label>Carriers JSON</label><textarea id="f_carriers" rows="4" placeholder='[{"line":"Auto Liability",...}]'></textarea>
+        </div>
         <input id="f_id" type="hidden"/>
         <button class="act b-gold" id="savePolicy" style="margin-top:10px">Save policy</button>
         <button class="act b-ghost" id="clearForm">Clear</button>
@@ -103,7 +133,7 @@
       </div>
       <div class="card"><table id="polTable"></table></div>
     </div>
-
+ 
     <!-- QUEUE -->
     <div class="panel" id="p-queue"><div class="card"><table id="queueTable"></table></div></div>
     <!-- CERTS -->
@@ -112,7 +142,7 @@
     <div class="panel" id="p-audit"><div class="card"><table id="auditTable"></table></div></div>
   </div>
 </div>
-
+ 
 <script>
 // ---- CONFIG ----
 const SUPABASE_URL = "https://dvjnnhwuamwcvqoxmske.supabase.co";
@@ -122,21 +152,21 @@ const BACKEND_URL = "https://pinnacle-certportal.onrender.com";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const $ = id => document.getElementById(id);
 let token = null;
-
+ 
 async function api(path, opts={}){
   const r = await fetch(BACKEND_URL+path, {...opts,
     headers:{"Content-Type":"application/json","Authorization":"Bearer "+token, ...(opts.headers||{})}});
   if(!r.ok){ throw new Error((await r.json().catch(()=>({}))).detail || r.statusText); }
   return r.json();
 }
-
+ 
 $("aLogin").onclick = async ()=>{
   const {data,error} = await sb.auth.signInWithPassword({email:$("aEmail").value.trim(),password:$("aPass").value});
   if(error){ $("aErr").textContent="Sign-in failed."; return; }
   token = data.session.access_token; await boot();
 };
 $("aLogout").onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
-
+ 
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
   document.querySelectorAll(".panel").forEach(x=>x.classList.remove("show"));
@@ -145,7 +175,7 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   if(t.dataset.p==="certs") loadCerts();
   if(t.dataset.p==="audit") loadAudit();
 });
-
+ 
 async function boot(){
   const {data:{user}} = await sb.auth.getUser();
   if(!user){ return; }
@@ -154,9 +184,9 @@ async function boot(){
   try{ await loadPolicies(); await loadQueue(); }
   catch(e){ $("polErr").textContent = "You're signed in but not on the admin allowlist. Add your user id to ADMIN_USER_IDS."; }
 }
-
+ 
 function esc(s){return (s??"").toString().replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
-
+ 
 async function loadPolicies(){
   const rows = await api("/admin/policies");
   $("polTable").innerHTML = "<tr><th>Insured</th><th>DOT</th><th>Term</th><th>Status</th><th>Self-serve</th><th>As of</th><th></th></tr>" +
@@ -173,31 +203,220 @@ async function loadPolicies(){
         ${p.status==='active'?`<button class="act b-stop" onclick="setStatus('${p.id}','cancelled')">Mark cancelled</button>`:`<button class="act b-gold" onclick="setStatus('${p.id}','active')">Mark active</button>`}
       </td></tr>`).join("");
 }
-window.editPolicy = (p)=>{
+// ---- COVERAGE BUILDER ----
+const CARRIER_NAIC = {
+  "Progressive Mountain Insurance Co": "35190",
+  "United Financial Casualty Co": "11770",
+  "Progressive Casualty Insurance Co": "24260",
+  "Progressive Express Insurance Co": "10193",
+  "Great West Casualty Co": "11371",
+  "Canal Insurance Co": "10464",
+  "Berkshire Hathaway Homestate Insurance Co": "20044",
+  "National Liability & Fire Insurance Co": "20052",
+  "National Indemnity Company": "20087",
+  "National Interstate Insurance Co": "32620",
+  "Northland Insurance Co": "24015",
+  "Sentry Select Insurance Co": "21180",
+  "Old Republic Insurance Co": "24147",
+  "Acuity, A Mutual Insurance Co": "14184",
+  "Government Employees Insurance Co (GEICO)": "22063",
+  "United States Liability Insurance Co": "25895"
+};
+ 
+function mmddyyToISO(s) {
+  if (!s) return '';
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return '';
+  let yr = parseInt(m[3], 10);
+  if (yr < 100) yr = yr >= 50 ? 1900 + yr : 2000 + yr;
+  return yr + '-' + m[1].padStart(2,'0') + '-' + m[2].padStart(2,'0');
+}
+function isoToMmddyy(s) {
+  if (!s) return '';
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return '';
+  const yr = parseInt(m[1], 10) % 100;
+  return m[2] + '/' + m[3] + '/' + String(yr).padStart(2,'0');
+}
+ 
+const _glLabels = ['EACH OCCURRENCE','GENERAL AGGREGATE','DAMAGE TO RENTED PREMISES','MED EXP','PERSONAL & ADV INJURY','PRODUCTS COMP/OP AGG'];
+const _glDefaults = ['1000000','2000000','100000','5000','1000000','2000000'];
+ 
+let _lineCounter = 0;
+function buildLineHTML(type, data) {
+  const id = ++_lineCounter;
+  const carrier = data ? (data.carrier||'') : '';
+  const naic = data ? (data.naic||'') : '';
+  const pnum = data ? (data.policy_number||'') : '';
+  const eff = data ? mmddyyToISO(data.eff||'') : '';
+  const exp = data ? mmddyyToISO(data.exp||'') : '';
+  const naicKnown = carrier && CARRIER_NAIC[carrier];
+  const naicRO = naicKnown ? 'readonly class="naic-locked"' : '';
+  const datalistOpts = Object.keys(CARRIER_NAIC).map(n=>'<option value="'+n+'">').join('');
+  const carrierDatalist = '<datalist id="dl_carrier_'+id+'">'+datalistOpts+'</datalist>';
+  const sharedFields = `<div class="cov-grid">
+      <div><label>Carrier</label>${carrierDatalist}
+        <input list="dl_carrier_${id}" value="${esc(carrier)}" oninput="covCarrierInput(this,${id})" data-lid="${id}" placeholder="Carrier name"/></div>
+      <div><label>NAIC</label><input id="naic_${id}" value="${esc(naic)}" ${naicRO} placeholder="NAIC #"/></div>
+      <div><label>Policy #</label><input id="pnum_${id}" value="${esc(pnum)}" placeholder="Policy number"/></div>
+      <div></div>
+      <div><label>Effective date</label><input id="eff_${id}" type="date" value="${eff}"/></div>
+      <div><label>Expiration date</label><input id="exp_${id}" type="date" value="${exp}"/></div>
+    </div>`;
+  let typeHTML = '';
+  if (type === 'al') {
+    const csl = data && data.limits ? (data.limits.CSL||'') : '1000000';
+    const autos = data && data.autos ? data.autos : [];
+    const autoTypes = ['SCHEDULED','HIRED','NON-OWNED','ANY AUTO','OWNED'];
+    const checks = autoTypes.map(a=>`<label class="cb-item"><input type="checkbox" value="${a}" ${autos.includes(a)?'checked':''}> ${a}</label>`).join('');
+    typeHTML = `<div class="cov-grid" style="margin-top:8px"><div><label>CSL Limit</label><input id="csl_${id}" value="${csl}" placeholder="1000000"/></div><div></div></div>
+    <div style="margin-top:6px"><label style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--slate)">Auto types</label>
+      <div class="cb-group" id="autos_${id}">${checks}</div></div>`;
+  } else if (type === 'gl') {
+    const lims = data && data.limits ? data.limits : {};
+    const rows = _glLabels.map((lbl,i)=>`<div class="cov-grid" style="margin-top:4px"><div><label>${lbl}</label><input id="gl_${id}_${i}" value="${lims[lbl]!==undefined?lims[lbl]:_glDefaults[i]}" placeholder="${_glDefaults[i]}"/></div><div></div></div>`).join('');
+    typeHTML = `<div style="margin-top:8px">${rows}</div>`;
+  } else if (type === 'mtc') {
+    const lim = data && data.limits ? (data.limits.Limit||'') : '100000';
+    const ded = data ? (data.deductible!==undefined?data.deductible:'') : '';
+    typeHTML = `<div class="cov-grid" style="margin-top:8px">
+      <div><label>Limit</label><input id="mtclim_${id}" value="${lim}" placeholder="100000"/></div>
+      <div><label>Deductible (optional)</label><input id="mtcded_${id}" value="${ded}" placeholder=""/></div></div>`;
+  } else {
+    const lineName = data ? (data.line||'') : '';
+    const limRows = data && data.limits ? Object.entries(data.limits) : [];
+    let limHtml = limRows.map(([lbl,amt],i)=>`<div class="lim-row"><input id="ollbl_${id}_${i}" value="${esc(lbl)}" placeholder="Label"/><input id="olamt_${id}_${i}" value="${amt}" placeholder="Amount" type="number"/><button type="button" onclick="this.closest('.lim-row').remove()" style="background:none;border:none;cursor:pointer;color:var(--stop)">✕</button></div>`).join('');
+    typeHTML = `<div class="cov-grid" style="margin-top:8px"><div><label>Line name</label><input id="olname_${id}" value="${esc(lineName)}" placeholder="e.g. Umbrella"/></div><div></div></div>
+    <div id="ollims_${id}" style="margin-top:6px">${limHtml}</div>
+    <button type="button" class="lim-add" onclick="covAddLimRow(${id})">+ add limit row</button>`;
+  }
+  const orig = data ? JSON.stringify(data) : '{}';
+  const typeLabel = type==='al'?'Auto Liability':type==='gl'?'General Liability':type==='mtc'?'Motor Truck Cargo':'Other';
+  return `<div class="cov-line" id="covline_${id}" data-type="${type}" data-orig='${orig.replace(/'/g,"&#39;")}'>
+    <div class="cov-line-header"><span>${typeLabel}</span>
+      <button type="button" class="act b-stop" style="font-size:11px;padding:3px 8px" onclick="covRemoveLine(${id})">Remove</button></div>
+    ${sharedFields}${typeHTML}
+  </div>`;
+}
+ 
+function covAddLine(type) { document.getElementById('covLines').insertAdjacentHTML('beforeend', buildLineHTML(type, null)); }
+function covRemoveLine(id) { const el=document.getElementById('covline_'+id); if(el) el.remove(); }
+function covCarrierInput(inp, id) {
+  const val = inp.value;
+  const naicEl = document.getElementById('naic_'+id);
+  if (CARRIER_NAIC[val]) { naicEl.value = CARRIER_NAIC[val]; naicEl.readOnly = true; naicEl.className = 'naic-locked'; }
+  else { naicEl.readOnly = false; naicEl.className = ''; }
+}
+function covAddLimRow(id) {
+  const container = document.getElementById('ollims_'+id);
+  const i = container.querySelectorAll('.lim-row').length;
+  container.insertAdjacentHTML('beforeend', `<div class="lim-row"><input id="ollbl_${id}_${i}" placeholder="Label"/><input id="olamt_${id}_${i}" placeholder="Amount" type="number"/><button type="button" onclick="this.closest('.lim-row').remove()" style="background:none;border:none;cursor:pointer;color:var(--stop)">✕</button></div>`);
+}
+function covToggleRaw() {
+  const rs=document.getElementById('rawSection'); const btn=document.getElementById('rawToggleBtn');
+  const shown=rs.style.display!=='none'; rs.style.display=shown?'none':'block';
+  btn.textContent=shown?'Edit raw JSON (advanced)':'Hide raw JSON';
+}
+ 
+function assembleCovData() {
+  const rawCov=(document.getElementById('f_cov').value||'').trim();
+  const rawCar=(document.getElementById('f_carriers').value||'').trim();
+  if (rawCov||rawCar) {
+    const coverages=rawCov?JSON.parse(rawCov):{};
+    const carriers=rawCar?JSON.parse(rawCar):[];
+    return {coverages, carriers, err:null};
+  }
+  const lines=document.querySelectorAll('#covLines .cov-line');
+  if (lines.length===0) return {coverages:{}, carriers:[], err:null};
+  const carriers=[]; const coverages={}; let errMsg=null;
+  const knownKeys=['eff','exp','line','naic','carrier','policy_number','autos','limits','deductible'];
+  for (const line of lines) {
+    const id=line.id.replace('covline_',''); const type=line.dataset.type;
+    const orig=JSON.parse(line.dataset.orig||'{}');
+    const carrier=line.querySelector('[data-lid="'+id+'"]').value.trim();
+    const naic=document.getElementById('naic_'+id).value.trim();
+    const pnum=document.getElementById('pnum_'+id).value.trim();
+    const effISO=document.getElementById('eff_'+id).value;
+    const expISO=document.getElementById('exp_'+id).value;
+    if (!carrier){errMsg='A coverage line is missing a carrier name.';break;}
+    if (!naic){errMsg='A coverage line is missing a NAIC number.';break;}
+    if (!pnum){errMsg='A coverage line is missing a policy number.';break;}
+    if (!effISO){errMsg='A coverage line is missing an effective date.';break;}
+    if (!expISO){errMsg='A coverage line is missing an expiration date.';break;}
+    const eff=isoToMmddyy(effISO); const exp=isoToMmddyy(expISO);
+    const extra={}; for (const k of Object.keys(orig)){if(!knownKeys.includes(k)) extra[k]=orig[k];}
+    let obj={eff,exp,naic,carrier,policy_number:pnum,...extra}; let limits={};
+    if (type==='al') {
+      const csl=parseFloat(document.getElementById('csl_'+id).value);
+      if (isNaN(csl)){errMsg='Auto Liability CSL limit must be a number.';break;}
+      const autos=[...line.querySelectorAll('#autos_'+id+' input[type=checkbox]:checked')].map(c=>c.value);
+      if (autos.length===0){errMsg='Auto Liability must have at least one auto type checked.';break;}
+      limits={CSL:csl}; obj={line:'Auto Liability',...obj,autos,limits};
+      coverages.auto_liability=csl;
+    } else if (type==='gl') {
+      for (let i=0;i<_glLabels.length;i++){const v=parseFloat(document.getElementById('gl_'+id+'_'+i).value);if(isNaN(v)){errMsg=_glLabels[i]+' must be a number.';break;}limits[_glLabels[i]]=v;}
+      if (errMsg) break;
+      obj={line:'Commercial General Liability',...obj,limits}; coverages.general_liability=limits['EACH OCCURRENCE'];
+    } else if (type==='mtc') {
+      const lim=parseFloat(document.getElementById('mtclim_'+id).value);
+      if (isNaN(lim)){errMsg='Motor Truck Cargo limit must be a number.';break;}
+      limits={Limit:lim}; obj={line:'Motor Truck Cargo',...obj,limits};
+      const dedStr=document.getElementById('mtcded_'+id).value.trim();
+      if (dedStr){const ded=parseFloat(dedStr);if(isNaN(ded)){errMsg='MTC deductible must be a number.';break;}obj.deductible=ded;}
+      coverages.cargo=lim;
+    } else {
+      const lineName=document.getElementById('olname_'+id).value.trim();
+      if (!lineName){errMsg='Other line must have a line name.';break;}
+      const limRows=line.querySelectorAll('#ollims_'+id+' .lim-row');
+      for (const row of limRows){const inputs=row.querySelectorAll('input');const lbl=inputs[0].value.trim();const amt=parseFloat(inputs[1].value);if(lbl&&!isNaN(amt))limits[lbl]=amt;}
+      obj={line:lineName,...obj,limits};
+    }
+    carriers.push(obj);
+  }
+  return {coverages, carriers, err:errMsg};
+}
+ 
+window.editPolicy = (p) => {
   $("f_id").value=p.id; $("f_client").value=p.client_id; $("f_insured").value=p.named_insured;
   $("f_dot").value=p.usdot||""; $("f_status").value=p.status; $("f_eff").value=p.effective_date;
   $("f_exp").value=p.expiration_date; $("f_addr").value=p.insured_address; $("f_asof").value=p.data_current_as_of;
-  $("f_producer").value=p.producer_block; $("f_cov").value=JSON.stringify(p.coverages);
-  $("f_carriers").value=JSON.stringify(p.carriers,null,0); window.scrollTo({top:0,behavior:"smooth"});
+  $("f_producer").value=p.producer_block;
+  $("f_cov").value=""; $("f_carriers").value="";
+  document.getElementById('covLines').innerHTML='';
+  for (const c of (p.carriers||[])) {
+    let type='other';
+    const ln=(c.line||'').toLowerCase();
+    if(ln.includes('auto liability')) type='al';
+    else if(ln.includes('general liability')) type='gl';
+    else if(ln.includes('motor truck cargo')) type='mtc';
+    document.getElementById('covLines').insertAdjacentHTML('beforeend', buildLineHTML(type, c));
+  }
+  window.scrollTo({top:0,behavior:"smooth"});
 };
-$("clearForm").onclick=()=>{ ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value=""); };
+$("clearForm").onclick=()=>{
+  ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value="");
+  document.getElementById('covLines').innerHTML=''; $("f_cov").value=''; $("f_carriers").value='';
+};
 $("savePolicy").onclick = async ()=>{
   $("polErr").textContent="";
+  const {coverages, carriers, err}=assembleCovData();
+  if (err){$("polErr").textContent=err; return;}
   try{
     const body={ client_id:$("f_client").value.trim(), named_insured:$("f_insured").value.trim(),
       usdot:$("f_dot").value.trim()||null, status:$("f_status").value.trim(),
       effective_date:$("f_eff").value, expiration_date:$("f_exp").value,
       producer_block:$("f_producer").value, insured_address:$("f_addr").value.trim(),
       data_current_as_of:$("f_asof").value,
-      coverages:JSON.parse($("f_cov").value||"{}"), carriers:JSON.parse($("f_carriers").value||"[]") };
+      coverages, carriers };
     if($("f_id").value) body.id=$("f_id").value;
     await api("/admin/policies",{method:"POST",body:JSON.stringify(body)});
     $("clearForm").click(); await loadPolicies();
   }catch(e){ $("polErr").textContent="Save failed: "+e.message; }
 };
+ 
 window.toggleServe=async(id,on)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({self_serve_enabled:on})}); loadPolicies(); };
 window.setStatus=async(id,s)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadPolicies(); };
-
+ 
 async function loadQueue(){
   const rows = await api("/admin/special-requests");
   const open = rows.filter(r=>r.status==='open').length;
@@ -213,7 +432,7 @@ async function loadQueue(){
     </tr>`).join("") || "<tr><td class='muted'>No special-wording requests. Nothing waiting on you.</td></tr>";
 }
 window.reqStatus=async(id,s)=>{ await api(`/admin/special-requests/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadQueue(); };
-
+ 
 async function loadCerts(){
   const rows = await api("/admin/certificates");
   $("certTable").innerHTML = "<tr><th>Issued</th><th>Cert #</th><th>Holder</th><th>By</th></tr>" +
@@ -230,7 +449,7 @@ async function loadAudit(){
       <td class="muted">${(r.audit_codes||[]).join(", ")}</td></tr>`).join("") ||
       "<tr><td class='muted'>No activity yet.</td></tr>";
 }
-
+ 
 $("nc_submit").onclick = async () => {
   const emailVal = $("nc_email").value.trim();
   const nameVal = $("nc_name").value.trim();
@@ -251,7 +470,7 @@ $("nc_submit").onclick = async () => {
     $("f_insured").value = esc(nameVal);
   } catch(e) { $("nc_result").innerHTML = '<span class="err">Error: ' + e.message + '</span>'; }
 };
-
+ 
 // keep session across refresh
 sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.access_token; boot(); }});
 </script>
