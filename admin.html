@@ -83,10 +83,15 @@
     <div class="panel show" id="p-policies">
       <div class="card" id="newCustomerCard">
         <strong>New customer</strong>
-        <div class="muted" style="margin-bottom:10px">Creates an auth user + clients row. Deliver the temp password out-of-band and tell them to change it immediately.</div>
+        <div class="muted" style="margin-bottom:10px">Creates an auth user + clients row. Set the password below, then deliver it to the customer; they can change it after first login.</div>
         <div class="grid" style="margin-top:8px">
           <div><label>Login email</label><input id="nc_email" type="email" placeholder="customer@example.com"/></div>
           <div><label>Named insured</label><input id="nc_name" placeholder="Acme Trucking LLC"/></div>
+        </div>
+        <div style="margin-top:8px">
+          <label>Password</label>
+          <input id="nc_pass" type="text" placeholder="Set the customer's password"/>
+          <div class="muted" style="margin-top:4px">Min 8 characters. Deliver to the customer; they can change it after first login.</div>
         </div>
         <button class="act b-gold" id="nc_submit" style="margin-top:10px">Create customer</button>
         <div id="nc_result" style="margin-top:10px"></div>
@@ -523,18 +528,22 @@ async function loadAudit(){
 $("nc_submit").onclick = async () => {
   const emailVal = $("nc_email").value.trim();
   const nameVal = $("nc_name").value.trim();
+    const passVal = $("nc_pass").value;
+    if(!emailVal || !nameVal || !passVal){ $("nc_result").innerHTML = '<span style="color:#c0392b">Email, named insured, and password are all required.</span>'; return; }
+    if(passVal.length < 8){ $("nc_result").innerHTML = '<span style="color:#c0392b">Password must be at least 8 characters.</span>'; return; }
   if (!emailVal || !nameVal) { $("nc_result").innerHTML = '<span class="err">Email and name are required.</span>'; return; }
   $("nc_result").textContent = "Creating…";
   try {
     const data = await api("/admin/customers", {
       method: "POST",
-      body: JSON.stringify({ email: emailVal, insured_name: nameVal })
+      body: JSON.stringify({ email: emailVal, insured_name: nameVal, password: passVal })
     });
     $("nc_result").innerHTML =
-      '<strong>Customer created.</strong><br>' +
-      'Client ID: <code>' + esc(data.client_id) + '</code><br>' +
-      'Temp password: <code>' + esc(data.temp_password) + '</code><br>' +
-      '<span class="muted">Deliver password out-of-band and ask customer to change it on first login.</span>';
+      '<div style="margin-top:6px">Customer created.</div>' +
+      '<div>Email: <code>' + esc(data.email) + '</code></div>' +
+      '<div>Password: <code>' + esc(data.password) + '</code></div>' +
+      '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
+      '<div class="muted" style="margin-top:6px">Deliver the email and password to the customer; they can change the password after first login.</div>';
     // Auto-fill the policy form
     $("f_client").value = data.client_id;
     $("f_insured").value = esc(nameVal);
