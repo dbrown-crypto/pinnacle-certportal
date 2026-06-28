@@ -26,8 +26,6 @@ Env:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET,
 from __future__ import annotations
 
 import os
-import secrets
-import string
 import base64
 import datetime as dt
 from typing import Optional
@@ -442,6 +440,7 @@ async def admin_certs(authorization: Optional[str] = Header(None)):
 class CustomerCreate(BaseModel):
     email: str
     insured_name: str
+    password: str
 
 
 @app.post("/admin/customers")
@@ -452,10 +451,12 @@ async def admin_create_customer(
     require_admin(authorization)
     email = body.email.strip().lower()
     name = body.insured_name.strip()
+    password = body.password.strip()
 
-    # Generate strong temp password — never logged
-    alphabet = string.ascii_letters + string.digits
-    temp_password = "".join(secrets.choice(alphabet) for _ in range(16))
+    # Password is admin-set and required. Validate before calling GoTrue so we
+    # never hand an invalid password to the auth API.
+    if len(password) < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
 
     gt_url = f"{SUPABASE_URL}/auth/v1/admin/users"
     uid: str
@@ -467,14 +468,14 @@ async def admin_create_customer(
             headers=_sb_headers(),
             json={
                 "email": email,
-                "password": temp_password,
+                "password": password,
                 "email_confirm": True,
                 "user_metadata": {"insured_name": name},
             },
         )
 
         if create_resp.status_code == 422:
-            # User already exists — look them up and reset password
+            # User already exists — look them up and reset to the provided password
             list_resp = await c.get(gt_url, headers=_sb_headers())
             list_resp.raise_for_status()
             users_data = list_resp.json()
@@ -484,11 +485,11 @@ async def admin_create_customer(
             if match is None:
                 raise HTTPException(422, f"User lookup failed for {email}")
             uid = match["id"]
-            # Reset password
+            # Reset password to the admin-provided one
             pw_resp = await c.put(
                 f"{gt_url}/{uid}",
                 headers=_sb_headers(),
-                json={"password": temp_password},
+                json={"password": password},
             )
             pw_resp.raise_for_status()
         else:
@@ -498,8 +499,7 @@ async def admin_create_customer(
     # Upsert clients row — id MUST equal auth user UUID
     await sb_upsert("clients", {"id": uid, "insured_name": name, "email": email})
 
-    return {"client_id": uid, "email": email, "temp_password": temp_password}
-
+    return {"client_id": uid, "email": email, "password": password}
 
 def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
     """Map stored data -> your ACORD 25 field names. Discover the names once
