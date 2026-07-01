@@ -384,6 +384,7 @@ def fill_acord101(content, blank_101_path):
     mc = getattr(content, "mc_number", "")
     drivers = getattr(content, "drivers", []) or []
     trailers = getattr(content, "trailers", []) or []
+    vehicles = getattr(content, "vehicles", []) or []
 
     insured_block = content.insured_name
     for ln in _lines(content.insured_address, 2):
@@ -391,8 +392,14 @@ def fill_acord101(content, blank_101_path):
     if usdot or mc:
         insured_block += f"\nDOT# {usdot}   MC# {mc}"
 
-    # build remark text (trailers + drivers, formatted)
-    remark = "TRAILERS / VEHICLES:\n"
+    # build remark text (power units + trailers + drivers, formatted)
+    remark = "POWER UNITS / TRUCKS:\n"
+    if vehicles:
+        for v in vehicles:
+            remark += f"  {v.get('description','')}   VIN {v.get('vin','')}   ${_money(v.get('value',0))}\n"
+    else:
+        remark += "  (none scheduled)\n"
+    remark += "\nTRAILERS:\n"
     if trailers:
         for t in trailers:
             remark += f"  {t.get('description','')}   VIN {t.get('vin','')}   ${_money(t.get('value',0))}\n"
