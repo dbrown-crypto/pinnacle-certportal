@@ -45,6 +45,9 @@ create table if not exists public.policies (
     insured_address     text not null,
     coverages           jsonb not null default '{}'::jsonb,   -- line -> limit
     carriers            jsonb not null default '[]'::jsonb,   -- [{line,carrier,policy_number,eff,exp,limits}]
+    vehicles            jsonb not null default '[]'::jsonb,   -- [{description,vin,value}] power units/trucks
+    trailers            jsonb not null default '[]'::jsonb,   -- [{description,vin,value}] trailers
+    drivers             jsonb not null default '[]'::jsonb,   -- [{first,last,lic_state}] drivers
     data_current_as_of  date not null default current_date,
     updated_at          timestamptz not null default now()
 );
