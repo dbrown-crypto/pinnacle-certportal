@@ -482,7 +482,7 @@ $("savePolicy").onclick = async ()=>{
       effective_date:$("f_eff").value, expiration_date:$("f_exp").value,
       producer_block:$("f_producer").value, insured_address:$("f_addr").value.trim(),
       data_current_as_of:$("f_asof").value,
-      coverages, carriers, trailers, drivers };
+      coverages, carriers, vehicles: (typeof assemblePowerUnits==='function'?assemblePowerUnits():[]), trailers, drivers };
     if($("f_id").value) body.id=$("f_id").value;
     await api("/admin/policies",{method:"POST",body:JSON.stringify(body)});
     $("clearForm").click(); await loadPolicies();
@@ -553,5 +553,60 @@ $("nc_submit").onclick = async () => {
 // keep session across refresh
 sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.access_token; boot(); }});
 </script>
+
+<script>
+/* Pinnacle additive: Power Units section + NHTSA VIN decoder. Non-invasive. */
+(function(){
+  window.puRowHTML=function(v){v=v||{};
+    return '<div class="pu-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">'
+      +'<input class="pu-desc" placeholder="Year Make Model (auto)" value="'+(v.description||'').replace(/"/g,'&quot;')+'" style="flex:2"/>'
+      +'<input class="pu-vin" placeholder="VIN" value="'+(v.vin||'').replace(/"/g,'&quot;')+'" style="flex:2"/>'
+      +'<input class="pu-val" type="number" placeholder="Value" value="'+(v.value!=null?v.value:'')+'" style="flex:1"/>'
+      +'<button type="button" class="act b-ghost pu-decode" style="font-size:11px">Decode</button>'
+      +'<button type="button" class="act b-stop pu-del" style="font-size:11px">×</button>'
+      +'</div>';
+  };
+  window.puAddRow=function(v){var c=document.getElementById('puLines'); if(c) c.insertAdjacentHTML('beforeend', puRowHTML(v||{}));};
+  window.assemblePowerUnits=function(){var out=[]; document.querySelectorAll('#puLines .pu-row').forEach(function(r){
+    var d=(r.querySelector('.pu-desc')||{}).value||''; var vin=(r.querySelector('.pu-vin')||{}).value||''; var val=(r.querySelector('.pu-val')||{}).value||'';
+    d=d.trim(); vin=vin.trim(); if(d||vin) out.push({description:d, vin:vin, value: val!==''?Number(val):0});
+  }); return out;};
+  function puLoad(p){var c=document.getElementById('puLines'); if(!c) return; c.innerHTML=''; ((p&&p.vehicles)||[]).forEach(function(v){puAddRow(v);});}
+  async function decodeVin(vin){vin=(vin||'').trim(); if(vin.length<8) return null;
+    var r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/'+encodeURIComponent(vin)+'?format=json');
+    var j=await r.json(); var d=(j.Results&&j.Results[0])||{};
+    var parts=[d.ModelYear,d.Make,d.Model].filter(Boolean); var body=d.BodyClass||d.VehicleType||'';
+    var desc=parts.join(' '); if(body) desc+=(desc?' ':'')+'('+body+')'; return desc.trim()||null;}
+  async function doDecode(vinInput){var row=vinInput.closest('.pu-row, .veh-row'); if(!row) return;
+    var desc=row.querySelector('.pu-desc, .veh-desc'); var vin=vinInput.value.trim(); if(vin.length<8) return;
+    var bg=vinInput.style.background; vinInput.style.background='#26506b';
+    try{var d=await decodeVin(vin); if(d&&desc) desc.value=d;}catch(e){}
+    vinInput.style.background=bg;}
+  document.addEventListener('change', function(e){var t=e.target; if(t&&t.matches&&t.matches('.pu-vin, .veh-vin')) doDecode(t);});
+  document.addEventListener('click', function(e){var t=e.target; if(!t||!t.matches) return;
+    if(t.matches('.pu-decode')){var v=t.closest('.pu-row').querySelector('.pu-vin'); if(v) doDecode(v);}
+    else if(t.matches('.pu-del')){var r=t.closest('.pu-row'); if(r) r.remove();}
+  });
+  function build(){
+    var vl=document.getElementById('vehLines'); if(!vl||document.getElementById('puSection')) return;
+    var addV=[].slice.call(document.querySelectorAll('button')).find(function(b){return /\+\s*Add vehicle/i.test(b.textContent);});
+    if(addV) addV.textContent='+ Add trailer';
+    var mu=vl.previousElementSibling; var lab=mu&&mu.previousElementSibling; var anchor=lab||vl;
+    if(lab&&/vehicle|trailer/i.test(lab.textContent||'')) lab.textContent='Trailers (VIN schedule)';
+    var wrap=document.createElement('div'); wrap.id='puSection';
+    wrap.innerHTML='<label style="font-size:12px;color:#9fb3c8;margin:14px 0 4px;display:block">Power units / trucks</label>'
+      +'<div class="muted" style="font-size:11px;margin-bottom:6px">Enter a VIN and click Decode (or tab out) to auto-fill Year/Make/Model via NHTSA. Prints under POWER UNITS on the ACORD 101.</div>'
+      +'<div id="puLines"></div>';
+    var btn=document.createElement('button'); btn.type='button'; btn.className='act b-ghost'; btn.textContent='+ Add power unit'; btn.style.cssText='font-size:11px;margin-bottom:6px';
+    btn.addEventListener('click', function(){puAddRow();});
+    anchor.parentNode.insertBefore(wrap, anchor);
+    anchor.parentNode.insertBefore(btn, anchor);
+    if(typeof window.editPolicy==='function'){ var _o=window.editPolicy; window.editPolicy=function(p){ _o(p); try{puLoad(p);}catch(e){} }; }
+    var cf=document.getElementById('clearForm'); if(cf) cf.addEventListener('click', function(){var c=document.getElementById('puLines'); if(c) c.innerHTML='';});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', build); else build();
+})();
+</script>
+
 </body>
 </html>
