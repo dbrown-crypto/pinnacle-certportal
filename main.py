@@ -272,6 +272,7 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
         data_current_as_of=dt.date.fromisoformat(policy["data_current_as_of"]),
         usdot=policy.get("usdot") or "",
         mc_number=policy.get("mc_number") or "",
+        vehicles=policy.get("vehicles") or [],
         drivers=policy.get("drivers") or [],
         trailers=policy.get("trailers") or [],
     )
@@ -375,6 +376,9 @@ class PolicyUpsert(BaseModel):
     insured_address: str
     coverages: dict = {}
     carriers: list = []
+    vehicles: list = []
+    trailers: list = []
+    drivers: list = []
     data_current_as_of: str
 
 
