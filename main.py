@@ -515,3 +515,8 @@ def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
         # "DESCRIPTION_OF_OPERATIONS": req.description_of_operations,
         # ...map each coverage line / limit / policy number / dates...
     }
+
+
+# --- Owner (admin) issue-on-behalf, Phase 1. See admin_issue.py. ------------
+import admin_issue  # noqa: E402
+admin_issue.register(app)
