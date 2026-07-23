@@ -81,12 +81,12 @@ _reset(caller=CLIENT)
 r = client.post("/admin/issue-certificate", json=BODY, headers=HDR)
 check("non-admin caller rejected with 403", r.status_code == 403, f"got {r.status_code}")
 
-# 2. special wording rejected in Phase 1
+# 2. special wording without owner confirmation is rejected (Phase 2 contract)
 _reset()
 r = client.post("/admin/issue-certificate",
                 json={**BODY, "requested_special_wording": ["additional_insured"]}, headers=HDR)
-check("special wording rejected with 422 (Phase 2 pending)", r.status_code == 422, f"got {r.status_code}")
-check("no audit/insert side effects on 422", not calls["audit"] and not calls["inserts"])
+check("special wording without confirmation rejected with 400", r.status_code == 400, f"got {r.status_code}")
+check("no audit/insert side effects on rejection", not calls["audit"] and not calls["inserts"])
 
 # 3. gate still blocks owner on cancelled policy
 _reset(policy_overrides={"status": "cancelled"})
@@ -128,5 +128,95 @@ _reset(caller=CLIENT)
 r = client.post("/issue-certificate", json=BODY, headers=HDR)
 check("client self-serve issuance still returns 200", r.status_code == 200, f"got {r.status_code} {r.text[:200]}")
 
-print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
-raise SystemExit(0 if failed == 0 else 1)
+print(f"\n[phase1 subtotal] {passed} passed, {failed} failed")
+
+# ===================== Phase 2 tests =====================
+POLICY_ENDO = {**POLICY, "endorsements": {
+    "additional_insured": {"lines": ["general_liability"], "form": "CG 20 10 04 13"},
+    "waiver_of_subrogation": {"lines": ["auto_liability"], "form": "CA 04 44"},
+}}
+gen_calls = []
+_real_gen = main.generate_certificate
+def _spy_gen(content, **kw):
+    gen_calls.append({"ops": content.description_of_operations, "sig": kw.get("signature_png_path")})
+    return b"%PDF-1.4 spy " + content.cert_number.encode()
+main.generate_certificate = _spy_gen
+main.SIGNATURE_PATH = "/srv/sig.png"
+patches = []
+async def fake_sb_patch(table, match, patch):
+    patches.append((table, match, patch)); return [{"id": match.get("id"), **patch}]
+main.sb_patch = fake_sb_patch
+
+W = {**BODY, "requested_special_wording": ["additional_insured"], "confirm_wording": True,
+     "wording_line": "General Liability"}
+
+# P2-1 wording without confirm -> 400
+_reset(); main.sb_patch = fake_sb_patch
+r = client.post("/admin/issue-certificate", json={**W, "confirm_wording": False}, headers=HDR)
+check("P2: wording without confirmation rejected 400", r.status_code == 400, f"got {r.status_code}")
+
+# P2-2 wording not flagged on policy -> 409 refused
+_reset(); main.sb_patch = fake_sb_patch
+r = client.post("/admin/issue-certificate", json=W, headers=HDR)
+check("P2: wording refused when policy has no endorsement flags", r.status_code == 409 and "not flagged" in r.text, f"got {r.status_code}")
+
+# P2-3 flagged policy -> 200, approved clause + form number in ops, audit codes, unsigned by default
+_reset(policy_overrides={"endorsements": POLICY_ENDO["endorsements"]}); main.sb_patch = fake_sb_patch
+gen_calls.clear()
+r = client.post("/admin/issue-certificate", json=W, headers=HDR)
+check("P2: AI wording issues 200 on flagged policy", r.status_code == 200, f"got {r.status_code} {r.text[:150]}")
+if r.status_code == 200:
+    d = r.json()
+    check("P2: approved AI clause printed with form number",
+          "included as an additional insured" in gen_calls[-1]["ops"] and "CG 20 10 04 13" in gen_calls[-1]["ops"])
+    check("P2: signature NOT applied by default", gen_calls[-1]["sig"] is None and d["signature_applied"] is False)
+    check("P2: audit has AUTHORIZED_WORDING code",
+          any("AUTHORIZED_WORDING_ADDITIONAL_INSURED" in c for c in calls["audit"][0][2]))
+    check("P2: wording stored in coverage_snapshot",
+          any(t == "issued_certificates" and row["coverage_snapshot"]["wording_kinds"] == ["additional_insured"] for t, row in calls["inserts"]))
+
+# P2-4 signature on request -> applied + logged
+_reset(policy_overrides={"endorsements": POLICY_ENDO["endorsements"]}); main.sb_patch = fake_sb_patch
+gen_calls.clear()
+r = client.post("/admin/issue-certificate", json={**W, "apply_signature": True}, headers=HDR)
+check("P2: signature applied when owner opts in",
+      r.status_code == 200 and gen_calls[-1]["sig"] == "/srv/sig.png" and
+      any("SIGNATURE_APPLIED_BY_OWNER" in c for c in calls["audit"][0][2]), f"got {r.status_code}")
+
+# P2-5 custom wording verbatim; missing text -> 400
+_reset(policy_overrides={"endorsements": {}}); main.sb_patch = fake_sb_patch
+r = client.post("/admin/issue-certificate", json={**BODY, "requested_special_wording": ["special_language"], "confirm_wording": True}, headers=HDR)
+check("P2: custom wording without text rejected 400", r.status_code == 400, f"got {r.status_code}")
+gen_calls.clear()
+r = client.post("/admin/issue-certificate", json={**BODY, "requested_special_wording": ["special_language"], "confirm_wording": True, "custom_wording": "Verbatim contract clause XYZ."}, headers=HDR)
+check("P2: custom wording prints verbatim", r.status_code == 200 and "Verbatim contract clause XYZ." in gen_calls[-1]["ops"], f"got {r.status_code}")
+
+# P2-6 fulfilling a special request marks it sent
+_reset(policy_overrides={"endorsements": POLICY_ENDO["endorsements"]}); main.sb_patch = fake_sb_patch
+patches.clear()
+r = client.post("/admin/issue-certificate", json={**W, "special_request_id": "req-9"}, headers=HDR)
+check("P2: special request marked sent",
+      r.status_code == 200 and any(t == "special_requests" and mt.get("id") == "req-9" and p.get("status") == "sent" for t, mt, p in patches))
+
+# P2-7 gate still blocks special wording on cancelled policy
+_reset(policy_overrides={"status": "cancelled", "endorsements": POLICY_ENDO["endorsements"]}); main.sb_patch = fake_sb_patch
+r = client.post("/admin/issue-certificate", json=W, headers=HDR)
+check("P2: cancelled policy still blocked 409 even with wording", r.status_code == 409, f"got {r.status_code}")
+
+# P2-8 endorsements endpoint: admin sets flags; non-admin rejected
+_reset(); main.sb_patch = fake_sb_patch
+r = client.post("/admin/policies/pol-1/endorsements", json={"endorsements": {"waiver_of_subrogation": {"form": "CA 04 44"}}}, headers=HDR)
+check("P2: endorsements patch works for admin", r.status_code == 200, f"got {r.status_code}")
+_reset(caller=CLIENT); main.sb_patch = fake_sb_patch
+r = client.post("/admin/policies/pol-1/endorsements", json={"endorsements": {}}, headers=HDR)
+check("P2: endorsements patch rejected for non-admin", r.status_code == 403, f"got {r.status_code}")
+
+# P2-9 regression: plain owner issuance keeps signature (standard behavior)
+_reset(); main.sb_patch = fake_sb_patch
+gen_calls.clear()
+r = client.post("/admin/issue-certificate", json=BODY, headers=HDR)
+check("P2: plain cert keeps standard signature behavior",
+      r.status_code == 200 and gen_calls[-1]["sig"] == "/srv/sig.png", f"got {r.status_code}")
+
+print(f"\nFINAL: {passed} passed, {failed} failed, {passed + failed} total")
+import sys as _s; _s.exit(0 if failed == 0 else 1)
