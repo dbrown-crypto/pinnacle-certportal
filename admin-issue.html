@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Pinnacle — Owner Certificate Issuance</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root { --navy:#0e1f38; --navy2:#122647; --gold:#c9a227; --text:#e8ecf3; --muted:#9fb0c8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:linear-gradient(160deg,#0b1930,#122647); min-height:100vh; color:var(--text);
+         font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; padding:32px 16px; }
+  .wrap { max-width:720px; margin:0 auto; }
+  .brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
+  .diamond { width:34px; height:34px; border:1.5px solid var(--gold); transform:rotate(45deg);
+             display:flex; align-items:center; justify-content:center; }
+  .diamond span { transform:rotate(-45deg); color:var(--gold); font-family:Georgia,serif; }
+  h1 { font-family:Georgia,serif; font-size:22px; font-weight:600; }
+  .sub { color:var(--gold); font-size:11px; letter-spacing:2px; text-transform:uppercase; }
+  .card { background:#fff; color:#1c2533; border-radius:10px; padding:22px; margin-bottom:16px;
+          box-shadow:0 8px 30px rgba(0,0,0,.35); }
+  .card h2 { font-size:17px; margin-bottom:12px; }
+  label { display:block; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#5b6b82;
+          margin:12px 0 4px; }
+  input, textarea, select { width:100%; padding:10px 12px; border:1px solid #cfd8e3; border-radius:6px;
+          font:inherit; background:#f8fafc; }
+  textarea { min-height:70px; resize:vertical; }
+  button { margin-top:16px; padding:11px 22px; border:0; border-radius:6px; background:var(--navy);
+           color:#fff; font:600 15px/1 inherit; cursor:pointer; }
+  button.gold { background:var(--gold); color:#1c2533; }
+  button:disabled { opacity:.55; cursor:wait; }
+  .msg { margin-top:14px; padding:12px 14px; border-radius:6px; font-size:14px; display:none; }
+  .msg.err { background:#fdecec; color:#8c2020; display:block; }
+  .msg.ok  { background:#e9f7ee; color:#1d6b3a; display:block; }
+  .msg.info{ background:#eef3fb; color:#27436b; display:block; }
+  .note { font-size:13px; color:#5b6b82; margin-top:10px; }
+  .foot { text-align:center; color:var(--muted); font-size:12px; margin-top:22px; }
+  .foot a { color:var(--muted); }
+  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:10px; background:#eef3fb;
+          color:#27436b; margin-left:6px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="diamond"><span>P</span></div>
+    <div>
+      <h1>Pinnacle Risk Advisors</h1>
+      <div class="sub">Owner Certificate Issuance</div>
+    </div>
+  </div>
+
+  <div class="card" id="loginCard" style="display:none">
+    <h2>Owner sign in</h2>
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="loginBtn">Sign in</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
+
+  <div class="card" id="issueCard" style="display:none">
+    <h2>Issue a certificate on behalf of a client</h2>
+    <div class="note">Standard informational ACORD 25 only. Additional insured, waiver of subrogation,
+      primary &amp; non-contributory, and custom wording cannot be issued here yet - those still go
+      through your office review process (Phase 2, pending E&amp;O wording approval). The policy must be
+      active and in-date: this page cannot override the gate.</div>
+
+    <label for="policySel">Client policy</label>
+    <select id="policySel"><option>Loading policies…</option></select>
+
+    <label for="holderName">Certificate holder name</label>
+    <input id="holderName" placeholder="e.g. Shipper Co">
+    <label for="holderAddr">Holder address</label>
+    <textarea id="holderAddr" placeholder="Street, City, State ZIP"></textarea>
+    <label for="holderEmail">Send certificate to (email, optional)</label>
+    <input id="holderEmail" type="email" placeholder="holder@example.com">
+    <label for="ops">Description of operations (optional)</label>
+    <textarea id="ops"></textarea>
+
+    <button class="gold" id="issueBtn">Issue &amp; send certificate</button>
+    <button id="dlBtn" style="display:none">Download PDF</button>
+    <div class="msg" id="issueMsg"></div>
+  </div>
+
+  <div class="foot">
+    Signed in as <span id="who">—</span> · <a href="#" id="signOut">Sign out</a><br>
+    Certificates are issued as a matter of information only and confer no rights upon the holder.
+  </div>
+</div>
+
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const show = (el, on) => { el.style.display = on ? '' : 'none'; };
+  const msg = (el, cls, text) => { el.className = 'msg ' + cls; el.textContent = text; };
+
+  // --- config: read the same CONFIG constants admin.html already ships with,
+  // so keys live in exactly one place and this page needs no manual setup.
+  let CFG = {};
+  try {
+    const t = await (await fetch('admin.html', { cache: 'no-store' })).text();
+    const grab = n => (t.match(new RegExp('const\\s+' + n + '\\s*=\\s*["\'`]([^"\'`]+)')) || [])[1];
+    CFG = { url: grab('SUPABASE_URL'), key: grab('SUPABASE_ANON_KEY'), backend: grab('BACKEND_URL') };
+  } catch (e) { /* handled below */ }
+  if (!CFG.url || !CFG.key || !CFG.backend) {
+    show($('loginCard'), true);
+    msg($('loginMsg'), 'err', 'Could not load portal configuration from admin.html.');
+    return;
+  }
+
+  const sb = supabase.createClient(CFG.url, CFG.key);
+  let token = null, pdfBytes = null, certNo = '';
+
+  async function refresh() {
+    const { data: { session } } = await sb.auth.getSession();
+    token = session ? session.access_token : null;
+    $('who').textContent = session ? (session.user.email || session.user.id) : '—';
+    show($('loginCard'), !session);
+    show($('issueCard'), !!session);
+    if (session) loadPolicies();
+  }
+
+  async function api(path, opts) {
+    const r = await fetch(CFG.backend + path, Object.assign({
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' }
+    }, opts));
+    let body = null;
+    try { body = await r.json(); } catch (e) {}
+    return { status: r.status, body: body };
+  }
+
+  async function loadPolicies() {
+    const sel = $('policySel');
+    const res = await api('/admin/policies');
+    if (res.status === 403) {
+      sel.innerHTML = '<option>—</option>';
+      msg($('issueMsg'), 'err', 'This account is not on the admin allowlist (ADMIN_USER_IDS). Owner access only.');
+      return;
+    }
+    if (res.status !== 200 || !Array.isArray(res.body)) {
+      sel.innerHTML = '<option>—</option>';
+      msg($('issueMsg'), 'err', 'Could not load policies (backend returned ' + res.status + ').');
+      return;
+    }
+    sel.innerHTML = '';
+    if (!res.body.length) { sel.innerHTML = '<option value="">No policies on file</option>'; return; }
+    for (const p of res.body) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.named_insured + ' - ' + p.status + ' - exp ' + p.expiration_date;
+      sel.appendChild(o);
+    }
+  }
+
+  $('loginBtn').onclick = async () => {
+    msg($('loginMsg'), 'info', 'Signing in…');
+    const { error } = await sb.auth.signInWithPassword({
+      email: $('email').value.trim(), password: $('password').value
+    });
+    if (error) { msg($('loginMsg'), 'err', error.message); return; }
+    $('loginMsg').className = 'msg';
+    refresh();
+  };
+
+  $('signOut').onclick = async (e) => { e.preventDefault(); await sb.auth.signOut(); refresh(); };
+
+  $('issueBtn').onclick = async () => {
+    const btn = $('issueBtn');
+    const policy_id = $('policySel').value;
+    const holder_name = $('holderName').value.trim();
+    const holder_address = $('holderAddr').value.trim();
+    if (!policy_id) { msg($('issueMsg'), 'err', 'Pick a client policy first.'); return; }
+    if (!holder_name || !holder_address) {
+      msg($('issueMsg'), 'err', 'Certificate holder name and address are required.'); return;
+    }
+    btn.disabled = true; show($('dlBtn'), false); pdfBytes = null;
+    msg($('issueMsg'), 'info', 'Running the gate and issuing…');
+    const res = await api('/admin/issue-certificate', {
+      method: 'POST',
+      body: JSON.stringify({
+        policy_id: policy_id,
+        holder_name: holder_name,
+        holder_address: holder_address,
+        holder_email: $('holderEmail').value.trim() || null,
+        description_of_operations: $('ops').value.trim(),
+        requested_special_wording: []
+      })
+    });
+    btn.disabled = false;
+    if (res.status === 200 && res.body && res.body.status === 'issued') {
+      certNo = res.body.cert_number;
+      pdfBytes = Uint8Array.from(atob(res.body.pdf_base64), c => c.charCodeAt(0));
+      const emailed = res.body.email_status === 'sent'
+        ? ' Emailed to ' + res.body.emailed_to.join(', ') + '.'
+        : (res.body.email_status === 'not_sent' ? ' No email requested.' : ' Email failed - download and send manually.');
+      msg($('issueMsg'), 'ok', 'Issued ' + certNo + ' on behalf of the client.' + emailed + ' Logged to the audit trail under your account.');
+      show($('dlBtn'), true);
+    } else if (res.status === 409) {
+      const d = (res.body && res.body.detail) || {};
+      msg($('issueMsg'), 'err', 'Gate refused: ' + (d.message || 'policy not eligible') + ' (Owner issuance cannot override policy status, dates, or the kill switch.)');
+    } else if (res.status === 422) {
+      msg($('issueMsg'), 'err', (res.body && (res.body.detail && res.body.detail.message || res.body.detail)) || 'Request rejected.');
+    } else if (res.status === 403) {
+      msg($('issueMsg'), 'err', 'This account is not on the admin allowlist (ADMIN_USER_IDS).');
+    } else {
+      msg($('issueMsg'), 'err', 'Backend error (' + res.status + '). Nothing was issued.');
+    }
+  };
+
+  $('dlBtn').onclick = () => {
+    if (!pdfBytes) return;
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'COI_' + certNo + '.pdf';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  sb.auth.onAuthStateChange(() => refresh());
+  refresh();
+})();
+</script>
+</body>
+</html>
