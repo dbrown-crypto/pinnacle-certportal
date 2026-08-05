@@ -147,7 +147,7 @@
 
     <div class="foot">
       Signed in as <span id="whoami"></span> · <button class="link" id="logoutBtn">Sign out</button><br/>
-      Pinnacle Risk Advisors LLC · (943) 239-3439 · dbrown@pinnacleriskad.com
+      Pinnacle Risk Advisors LLC · (770) 758-3197 · dbrown@pinnacleriskad.com
     </div>
   </div>
 </div>
@@ -191,7 +191,7 @@ async function boot(){
   const { data: policies, error } = await sb.from("policies").select("*").order("named_insured");
   const list = $("policyList");
   if (error || !policies || policies.length === 0){
-    list.innerHTML = `<div class="card"><div class="card-body">No policies are linked to your account yet. Please contact our office at (943) 239-3439.</div></div>`;
+    list.innerHTML = `<div class="card"><div class="card-body">No policies are linked to your account yet. Please contact our office at (770) 758-3197.</div></div>`;
     return;
   }
   list.innerHTML = "";
@@ -269,7 +269,7 @@ $("issueBtn").onclick = async () => {
       showMsg($("resultMsg"),"err", m);
     }
   } catch(err){
-    showMsg($("resultMsg"),"err","Something went wrong reaching our system. Please try again or call (943) 239-3439.");
+    showMsg($("resultMsg"),"err","Something went wrong reaching our system. Please try again or call (770) 758-3197.");
   } finally {
     $("issueBtn").disabled = false; $("issueBtn").textContent = "Issue & send certificate";
   }
