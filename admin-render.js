@@ -1,8 +1,4 @@
-const probe = 1;
-  // indent test
-const two = 2;const probe = 1;
-  // indent test
-const two = 2;/* ============================================================================
+/* ============================================================================
  * admin-render.js — safe DOM builders for the Pinnacle Certificate Admin
  *
  * Replaces the innerHTML-based row builders in admin.html.
@@ -198,3 +194,4 @@ window.PinnacleRender = {
   renderAudit,
   el, td, button, fmtDate, clear
 };
+
