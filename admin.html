@@ -206,20 +206,12 @@ async function boot(){
 function esc(s){return String(s??'').replace(/[&<>"'`=\/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'})[c]);}
  
 async function loadPolicies(){
-  const rows = await api("/admin/policies");
-  $("polTable").innerHTML = "<tr><th>Insured</th><th>DOT</th><th>Term</th><th>Status</th><th>Self-serve</th><th>As of</th><th></th></tr>" +
-    rows.map(p=>`<tr>
-      <td><strong>${esc(p.named_insured)}</strong></td>
-      <td>${esc(p.usdot||"—")}</td>
-      <td>${p.effective_date}→${p.expiration_date}</td>
-      <td><span class="pill ${p.status==='active'?'active':'off'}">${p.status}</span></td>
-      <td><span class="pill ${p.self_serve_enabled?'active':'off'}">${p.self_serve_enabled?'On':'Off'}</span></td>
-      <td>${p.data_current_as_of}</td>
-      <td>
-        <button class="act b-ghost" onclick='editPolicy(${JSON.stringify(p)})'>Edit</button>
-        <button class="act ${p.self_serve_enabled?'b-stop':'b-gold'}" onclick="toggleServe('${p.id}',${!p.self_serve_enabled})">${p.self_serve_enabled?'Kill switch':'Re-enable'}</button>
-        ${p.status==='active'?`<button class="act b-stop" onclick="setStatus('${p.id}','cancelled')">Mark cancelled</button>`:`<button class="act b-gold" onclick="setStatus('${p.id}','active')">Mark active</button>`}
-      </td></tr>`).join("");
+  const rows = await api('/admin/policies');
+  PinnacleRender.renderPolicies(rows, {
+    onEdit:        p         => editPolicy(p),
+    onToggleServe: (id, val) => toggleServe(id, val),
+    onSetStatus:   (id, val) => setStatus(id, val)
+  });
 }
 // ---- COVERAGE BUILDER ----
 const CARRIER_NAIC = {
@@ -494,18 +486,8 @@ window.toggleServe=async(id,on)=>{ await api(`/admin/policies/${id}/status`,{met
 window.setStatus=async(id,s)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadPolicies(); };
  
 async function loadQueue(){
-  const rows = await api("/admin/special-requests");
-  const open = rows.filter(r=>r.status==='open').length;
-  $("queueCount").textContent = open?`(${open})`:"";
-  $("queueTable").innerHTML = "<tr><th>When</th><th>Holder</th><th>Wording</th><th>Status</th><th></th></tr>" +
-    rows.map(r=>`<tr>
-      <td>${new Date(r.created_at).toLocaleString()}</td>
-      <td><strong>${esc(r.holder_name)}</strong><br><span class="muted">${esc(r.holder_address)}</span></td>
-      <td>${(r.requested_wording||[]).join(", ")}</td>
-      <td><span class="pill ${r.status==='open'?'open':'sent'}">${r.status}</span></td>
-      <td>${r.status==='open'?`<button class="act b-gold" onclick="reqStatus('${r.id}','sent')">Mark sent</button>
-           <button class="act b-ghost" onclick="reqStatus('${r.id}','in_progress')">In progress</button>`:''}</td>
-    </tr>`).join("") || "<tr><td class='muted'>No special-wording requests. Nothing waiting on you.</td></tr>";
+  const rows = await api('/admin/special-requests');
+  PinnacleRender.renderQueue(rows, { onStatus: (id, s) => reqStatus(id, s) });
 }
 window.reqStatus=async(id,s)=>{ await api(`/admin/special-requests/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadQueue(); };
  
