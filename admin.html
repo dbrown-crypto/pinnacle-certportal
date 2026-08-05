@@ -83,7 +83,7 @@
     <div class="panel show" id="p-policies">
       <div class="card" id="newCustomerCard">
         <strong>New customer</strong>
-        <div class="muted" style="margin-bottom:10px">Creates an auth user + clients row. Set the password below, then deliver it to the customer; they can change it after first login.</div>
+                <div class="muted" style="margin-bottom:10px">Creates an auth user + clients row. Set the password below, then deliver it to the customer.</div>
         <div class="grid" style="margin-top:8px">
           <div><label>Login email</label><input id="nc_email" type="email" placeholder="customer@example.com"/></div>
           <div><label>Named insured</label><input id="nc_name" placeholder="Acme Trucking LLC"/></div>
@@ -91,7 +91,7 @@
         <div style="margin-top:8px">
           <label>Password</label>
           <input id="nc_pass" type="password" autocomplete="new-password" placeholder="Set the customer's password"/>
-          <div class="muted" style="margin-top:4px">Min 8 characters. Deliver to the customer; they can change it after first login.</div>
+                  <div class="muted" style="margin-top:4px">Min 8 characters. Deliver to the customer.</div>
         </div>
         <button class="act b-gold" id="nc_submit" style="margin-top:10px">Create customer</button>
         <div id="nc_result" style="margin-top:10px"></div>
@@ -499,13 +499,8 @@ async function loadCerts(){
       "<tr><td class='muted'>No certificates issued yet.</td></tr>";
 }
 async function loadAudit(){
-  const rows = await api("/admin/audit");
-  $("auditTable").innerHTML = "<tr><th>When</th><th>Route</th><th>Holder</th><th>Codes</th></tr>" +
-    rows.map(r=>`<tr><td>${new Date(r.occurred_at).toLocaleString()}</td>
-      <td><span class="pill ${r.action}">${r.action}</span></td>
-      <td>${esc(r.holder_name||"—")}</td>
-      <td class="muted">${(r.audit_codes||[]).join(", ")}</td></tr>`).join("") ||
-      "<tr><td class='muted'>No activity yet.</td></tr>";
+  const rows = await api('/admin/audit');
+  PinnacleRender.renderAudit(rows);
 }
  
 $("nc_submit").onclick = async () => {
@@ -524,9 +519,8 @@ $("nc_submit").onclick = async () => {
     $("nc_result").innerHTML =
       '<div style="margin-top:6px">Customer created.</div>' +
       '<div>Email: <code>' + esc(data.email) + '</code></div>' +
-      '<div>Password: <code>' + esc(data.password) + '</code></div>' +
-      '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
-      '<div class="muted" style="margin-top:6px">Deliver the email and password to the customer; they can change the password after first login.</div>';
+            '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
+              <div class="muted" style="margin-top:6px">Deliver the email and password to the customer.</div>
     // Auto-fill the policy form
     $("f_client").value = data.client_id;
     $("f_insured").value = esc(nameVal);
