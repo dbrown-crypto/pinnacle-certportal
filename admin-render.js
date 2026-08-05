@@ -11,13 +11,15 @@
  * object directly, so no customer data is ever serialized into an attribute.
  * That is what removes the apostrophe/quote class of bug permanently —
  * O'Neal Trucking, "Smith & Sons", and <script> are all just text.
+ *
+ * Markup, class names and button labels reproduce the original exactly, so
+ * existing CSS (.pill, .act, .b-ghost, .b-gold, .b-stop, .muted) still applies.
  * ==========================================================================*/
 
 'use strict';
 
-/* --- small helpers -------------------------------------------------------- */
+/* --- helpers -------------------------------------------------------------- */
 
-/** Create an element with text content set safely. */
 function el(tag, text, className) {
   const node = document.createElement(tag);
   if (text !== undefined && text !== null) node.textContent = String(text);
@@ -25,7 +27,6 @@ function el(tag, text, className) {
   return node;
 }
 
-/** Table cell with safe text. */
 function td(text, className) {
   return el('td', text ?? '', className);
 }
@@ -38,106 +39,81 @@ function button(label, className, onClick) {
   return b;
 }
 
-/** ISO date -> MM/DD/YY for display. Returns '' for empty/invalid input. */
-function fmtDate(iso) {
-  if (!iso) return '';
-  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return m ? `${m[2]}/${m[3]}/${m[1].slice(2)}` : '';
+/** span.pill with a state class, matching the original markup. */
+function pill(text, stateClass) {
+  return el('span', text ?? '', 'pill ' + stateClass);
 }
 
-/** Replace all children of a node without touching innerHTML. */
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
   return node;
 }
 
-/** Build a header row from an array of labels. */
 function headerRow(labels) {
   const tr = document.createElement('tr');
   labels.forEach(l => tr.appendChild(el('th', l)));
   return tr;
 }
 
+function tbodyOf(table) {
+  return table.tBodies[0] || table.appendChild(document.createElement('tbody'));
+}
+
 /* --- policies table ------------------------------------------------------- */
-/* Columns: Insured | DOT | Term | Status | Self-serve | As of | (actions)
- * Actions: Edit, Kill switch, Mark cancelled
+/* Original: Insured | DOT | Term | Status | Self-serve | As of | actions
+ * Actions: Edit, Kill switch/Re-enable, Mark cancelled/Mark active
  *
- * Wire-up: renderPolicies(policies, { onEdit, onToggleServe, onSetStatus })
- * The three callbacks receive the policy OBJECT, not an id string, so the
- * existing editPolicy(p) / toggleServe(id, val) / setStatus(id, val) bodies
- * can be reused with minimal change.
+ * renderPolicies(rows, { onEdit, onToggleServe, onSetStatus })
+ *   onEdit(policy)              — receives the object, not a JSON string
+ *   onToggleServe(id, nextBool)
+ *   onSetStatus(id, status)
  */
-function renderPolicies(policies, handlers) {
+function renderPolicies(rows, handlers) {
   const table = document.getElementById('polTable');
   if (!table) return;
-  const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
+  const body = tbodyOf(table);
   clear(body);
 
   body.appendChild(headerRow(
     ['Insured', 'DOT', 'Term', 'Status', 'Self-serve', 'As of', '']
   ));
 
-  policies.forEach(p => {
+  rows.forEach(p => {
     const tr = document.createElement('tr');
 
-    tr.appendChild(td(p.named_insured));
+    const nameCell = document.createElement('td');
+    nameCell.appendChild(el('strong', p.named_insured));
+    tr.appendChild(nameCell);
+
     tr.appendChild(td(p.usdot));
-    tr.appendChild(td(`${fmtDate(p.effective_date)} – ${fmtDate(p.expiration_date)}`));
-    tr.appendChild(td(p.status));
-    tr.appendChild(td(p.self_serve_enabled ? 'On' : 'Off'));
-    tr.appendChild(td(fmtDate(p.data_current_as_of)));
+    tr.appendChild(td(`${p.effective_date ?? ''} – ${p.expiration_date ?? ''}`));
+
+    const statusCell = document.createElement('td');
+    statusCell.appendChild(pill(p.status, p.status === 'active' ? 'active' : 'off'));
+    tr.appendChild(statusCell);
+
+    const serveCell = document.createElement('td');
+    serveCell.appendChild(pill(
+      p.self_serve_enabled ? 'On' : 'Off',
+      p.self_serve_enabled ? 'active' : 'off'
+    ));
+    tr.appendChild(serveCell);
+
+    tr.appendChild(td(p.data_current_as_of));
 
     const actions = document.createElement('td');
-    actions.appendChild(button('Edit', 'btn-sm', () => handlers.onEdit(p)));
+    actions.appendChild(button('Edit', 'act b-ghost', () => handlers.onEdit(p)));
     actions.appendChild(button(
-      'Kill switch', 'btn-sm',
+      p.self_serve_enabled ? 'Kill switch' : 'Re-enable',
+      'act ' + (p.self_serve_enabled ? 'b-stop' : 'b-gold'),
       () => handlers.onToggleServe(p.id, !p.self_serve_enabled)
     ));
-    actions.appendChild(button(
-      'Mark cancelled', 'btn-sm',
-      () => handlers.onSetStatus(p.id, 'cancelled')
-    ));
-    tr.appendChild(actions);
-
-    body.appendChild(tr);
-  });
-}
-
-/* --- special-request queue ------------------------------------------------ */
-/* Columns: When | Holder | Wording | Status | (actions)
- *
- * This is the highest-risk table: `requested_wording`, `holder_name` and
- * `notes` are all customer-submitted free text. Everything here goes through
- * textContent.
- */
-function renderQueue(requests, handlers) {
-  const table = document.getElementById('queueTable');
-  if (!table) return;
-  const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
-  clear(body);
-
-  body.appendChild(headerRow(['When', 'Holder', 'Wording', 'Status', '']));
-
-  requests.forEach(r => {
-    const tr = document.createElement('tr');
-
-    tr.appendChild(td(fmtDate(r.created_at)));
-    tr.appendChild(td(r.holder_name));
-
-    // requested_wording may be a JSON array or a free-text string.
-    const wording = Array.isArray(r.requested_wording)
-      ? r.requested_wording.join(', ')
-      : (r.requested_wording ?? '');
-    tr.appendChild(td(wording));
-
-    tr.appendChild(td(r.status));
-
-    const actions = document.createElement('td');
-    if (handlers && handlers.onSetStatus) {
-      actions.appendChild(button(
-        'Mark handled', 'btn-sm',
-        () => handlers.onSetStatus(r.id, 'handled')
-      ));
+    if (p.status === 'active') {
+      actions.appendChild(button('Mark cancelled', 'act b-stop',
+        () => handlers.onSetStatus(p.id, 'cancelled')));
+    } else {
+      actions.appendChild(button('Mark active', 'act b-gold',
+        () => handlers.onSetStatus(p.id, 'active')));
     }
     tr.appendChild(actions);
 
@@ -145,43 +121,64 @@ function renderQueue(requests, handlers) {
   });
 }
 
-/* --- issued certificates -------------------------------------------------- */
-function renderCerts(certs) {
-  const table = document.getElementById('certTable');
+/* --- special-request queue ------------------------------------------------ */
+/* Original: When | Holder | Wording | Status | actions
+ *
+ * This is the table that carried the stored-XSS path: requested_wording is
+ * customer-submitted free text and was previously joined into innerHTML
+ * WITHOUT escaping, while the holder fields around it were escaped. Here every
+ * field goes through textContent, so the distinction no longer matters.
+ *
+ * renderQueue(rows, { onStatus })  — onStatus(id, 'sent' | 'in_progress')
+ */
+function renderQueue(rows, handlers) {
+  const table = document.getElementById('queueTable');
   if (!table) return;
-  const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
+  const body = tbodyOf(table);
   clear(body);
 
-  body.appendChild(headerRow(['Issued', 'Cert #', 'Holder', 'Description', 'By']));
+  const openCount = rows.filter(r => r.status === 'open').length;
+  const counter = document.getElementById('queueCount');
+  if (counter) counter.textContent = openCount ? `(${openCount})` : '';
 
-  certs.forEach(c => {
+  body.appendChild(headerRow(['When', 'Holder', 'Wording', 'Status', '']));
+
+  if (!rows.length) {
     const tr = document.createElement('tr');
-    tr.appendChild(td(fmtDate(c.issued_at)));
-    tr.appendChild(td(c.cert_number));
-    tr.appendChild(td(c.holder_name));
-    tr.appendChild(td(c.description_of_ops));
-    tr.appendChild(td(c.issued_by));
+    tr.appendChild(td('No special wording requests. Nothing waiting on you.', 'muted'));
     body.appendChild(tr);
-  });
-}
+    return;
+  }
 
-/* --- audit log ------------------------------------------------------------ */
-function renderAudit(entries) {
-  const table = document.getElementById('auditTable');
-  if (!table) return;
-  const body = table.tBodies[0] || table.appendChild(document.createElement('tbody'));
-  clear(body);
-
-  body.appendChild(headerRow(['When', 'Action', 'Holder', 'Codes', 'Reasons']));
-
-  entries.forEach(a => {
+  rows.forEach(r => {
     const tr = document.createElement('tr');
-    tr.appendChild(td(fmtDate(a.occurred_at)));
-    tr.appendChild(td(a.action));
-    tr.appendChild(td(a.holder_name));
-    // audit_codes / reasons are jsonb — stringify, then insert as TEXT.
-    tr.appendChild(td(Array.isArray(a.audit_codes) ? a.audit_codes.join(', ') : JSON.stringify(a.audit_codes ?? '')));
-    tr.appendChild(td(Array.isArray(a.reasons) ? a.reasons.join('; ') : JSON.stringify(a.reasons ?? '')));
+
+    tr.appendChild(td(r.created_at ? new Date(r.created_at).toLocaleString() : ''));
+
+    const holder = document.createElement('td');
+    holder.appendChild(el('strong', r.holder_name));
+    holder.appendChild(document.createElement('br'));
+    holder.appendChild(el('span', r.holder_address, 'muted'));
+    tr.appendChild(holder);
+
+    const wording = Array.isArray(r.requested_wording)
+      ? r.requested_wording.join(', ')
+      : (r.requested_wording ?? '');
+    tr.appendChild(td(wording));
+
+    const statusCell = document.createElement('td');
+    statusCell.appendChild(pill(r.status, r.status === 'open' ? 'open' : 'sent'));
+    tr.appendChild(statusCell);
+
+    const actions = document.createElement('td');
+    if (r.status === 'open' && handlers && handlers.onStatus) {
+      actions.appendChild(button('Mark sent', 'act b-gold',
+        () => handlers.onStatus(r.id, 'sent')));
+      actions.appendChild(button('In progress', 'act b-ghost',
+        () => handlers.onStatus(r.id, 'in_progress')));
+    }
+    tr.appendChild(actions);
+
     body.appendChild(tr);
   });
 }
@@ -190,8 +187,5 @@ function renderAudit(entries) {
 window.PinnacleRender = {
   renderPolicies,
   renderQueue,
-  renderCerts,
-  renderAudit,
-  el, td, button, fmtDate, clear
+  el, td, button, pill, clear
 };
-
