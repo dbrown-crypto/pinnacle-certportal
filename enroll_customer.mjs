@@ -42,7 +42,7 @@ const CUSTOMERS = {
       effective_date:     '2026-06-13',
       expiration_date:    '2027-06-13',
       data_current_as_of: TODAY,
-      producer_block:     'Pinnacle Risk Advisors LLC\n2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339\n(943) 239-3439  certs@pinnacleriskad.com',
+      producer_block:     'Pinnacle Risk Advisors LLC\n2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339\n(770) 758-3197  certs@pinnacleriskad.com',
       coverages: {
         auto_liability:    1000000,
         general_liability: 1000000,
