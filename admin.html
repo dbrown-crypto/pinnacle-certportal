@@ -115,16 +115,16 @@
         <!-- Coverage Builder -->
         <label style="font-weight:600;margin-bottom:4px;display:block">Coverage Lines</label>
         <div class="cov-add-btns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-          <button type="button" class="act b-ghost" onclick="covAddLine('al')">+ Auto Liability</button>
-          <button type="button" class="act b-ghost" onclick="covAddLine('gl')">+ General Liability</button>
-          <button type="button" class="act b-ghost" onclick="covAddLine('mtc')">+ Motor Truck Cargo</button>
-          <button type="button" class="act b-ghost" onclick="covAddLine('other')">+ Other line</button>
+          <button type="button" class="act b-ghost" id="addAutoLiability">+ Auto Liability</button>
+          <button type="button" class="act b-ghost" id="addGeneralLiability">+ General Liability</button>
+          <button type="button" class="act b-ghost" id="addMotorTruckCargo">+ Motor Truck Cargo</button>
+          <button type="button" class="act b-ghost" id="addOtherCoverage">+ Other line</button>
         </div>
         <div id="covLines"></div>
         <div id="covErr" class="err" style="margin-bottom:6px"></div>
         <!-- Raw JSON fallback -->
         <div class="raw-toggle-row" style="margin-bottom:6px">
-          <button type="button" class="act b-ghost" id="rawToggleBtn" onclick="covToggleRaw()" style="font-size:11px">Edit raw JSON (advanced)</button>
+          <button type="button" class="act b-ghost" id="rawToggleBtn" style="font-size:11px">Edit raw JSON (advanced)</button>
         </div>
         <div id="rawSection" style="display:none">
           <label class="muted" style="font-size:11px">Raw override — if non-empty these override the builder on save</label>
@@ -136,12 +136,12 @@
         <label style="font-weight:600;margin:14px 0 4px;display:block">Vehicles / Trailers</label>
         <div class="muted" style="font-size:11px;margin-bottom:6px">Power units and trailers. Stated value prints next to the VIN on the cert.</div>
         <div id="vehLines"></div>
-        <button type="button" class="act b-ghost" onclick="vehAddRow()" style="font-size:11px;margin-bottom:6px">+ Add vehicle</button>
+        <button type="button" class="act b-ghost" id="addVehicle" style="font-size:11px;margin-bottom:6px">+ Add vehicle</button>
  
         <!-- Drivers (maps to policies.drivers — drives the ACORD 101 driver schedule) -->
         <label style="font-weight:600;margin:14px 0 4px;display:block">Drivers</label>
         <div id="drvLines"></div>
-        <button type="button" class="act b-ghost" onclick="drvAddRow()" style="font-size:11px;margin-bottom:6px">+ Add driver</button>
+        <button type="button" class="act b-ghost" id="addDriver" style="font-size:11px;margin-bottom:6px">+ Add driver</button>
  
         <input id="f_id" type="hidden"/>
         <button class="act b-gold" id="savePolicy" style="margin-top:10px">Save policy</button>
@@ -178,21 +178,21 @@ async function api(path, opts={}){
   return r.json();
 }
  
-$("aLogin").onclick = async ()=>{
+$("aLogin").addEventListener('click', async ()=>{
   const {data,error} = await sb.auth.signInWithPassword({email:$("aEmail").value.trim(),password:$("aPass").value});
   if(error){ $("aErr").textContent="Sign-in failed."; return; }
   token = data.session.access_token; await boot();
-};
-$("aLogout").onclick = async ()=>{ await sb.auth.signOut(); location.reload(); };
+});
+$("aLogout").addEventListener('click', async ()=>{ await sb.auth.signOut(); location.reload(); });
  
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener('click', ()=>{
   document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
   document.querySelectorAll(".panel").forEach(x=>x.classList.remove("show"));
   t.classList.add("active"); $("p-"+t.dataset.p).classList.add("show");
   if(t.dataset.p==="queue") loadQueue();
   if(t.dataset.p==="certs") loadCerts();
   if(t.dataset.p==="audit") loadAudit();
-});
+}));
  
 async function boot(){
   const {data:{user}} = await sb.auth.getUser();
@@ -202,8 +202,6 @@ async function boot(){
   try{ await loadPolicies(); await loadQueue(); }
   catch(e){ $("polErr").textContent = "You're signed in but not on the admin allowlist. Add your user id to ADMIN_USER_IDS."; }
 }
- 
-function esc(s){return String(s??'').replace(/[&<>"'`=\/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'})[c]);}
  
 async function loadPolicies(){
   const rows = await api('/admin/policies');
@@ -253,63 +251,184 @@ const _glLabels = ['EACH OCCURRENCE','GENERAL AGGREGATE','DAMAGE TO RENTED PREMI
 const _glDefaults = ['1000000','2000000','100000','5000','1000000','2000000'];
  
 let _lineCounter = 0;
-function buildLineHTML(type, data) {
+function editorElement(tag, options={}) {
+  const node = document.createElement(tag);
+  if (options.id) node.id = options.id;
+  if (options.className) node.className = options.className;
+  if (options.text !== undefined) node.textContent = String(options.text);
+  if (options.type) node.type = options.type;
+  if (options.placeholder !== undefined) node.placeholder = options.placeholder;
+  if (options.value !== undefined && options.value !== null) node.value = String(options.value);
+  if (options.style) node.style.cssText = options.style;
+  return node;
+}
+
+function editorField(labelText, input, labelStyle) {
+  const wrap = document.createElement('div');
+  const label = editorElement('label', {text: labelText});
+  if (labelStyle) label.style.cssText = labelStyle;
+  wrap.append(label, input);
+  return wrap;
+}
+
+function buildLimitRowNode(id, index, labelValue='', amountValue='') {
+  const row = editorElement('div', {className:'lim-row'});
+  const labelInput = editorElement('input', {
+    id:`ollbl_${id}_${index}`,
+    value:labelValue,
+    placeholder:'Label'
+  });
+  const amountInput = editorElement('input', {
+    id:`olamt_${id}_${index}`,
+    type:'number',
+    value:amountValue,
+    placeholder:'Amount'
+  });
+  const remove = editorElement('button', {text:'✕', type:'button'});
+  remove.style.cssText = 'background:none;border:none;cursor:pointer;color:var(--stop)';
+  remove.addEventListener('click', () => row.remove());
+  row.append(labelInput, amountInput, remove);
+  return row;
+}
+
+function buildLineNode(type, data) {
+  data = data || {};
   const id = ++_lineCounter;
-  const carrier = data ? (data.carrier||'') : '';
-  const naic = data ? (data.naic||'') : '';
-  const pnum = data ? (data.policy_number||'') : '';
-  const eff = data ? mmddyyToISO(data.eff||'') : '';
-  const exp = data ? mmddyyToISO(data.exp||'') : '';
-  const naicKnown = carrier && CARRIER_NAIC[carrier];
-  const naicRO = naicKnown ? 'readonly class="naic-locked"' : '';
-  const datalistOpts = Object.keys(CARRIER_NAIC).map(n=>'<option value="'+n+'">').join('');
-  const carrierDatalist = '<datalist id="dl_carrier_'+id+'">'+datalistOpts+'</datalist>';
-  const sharedFields = `<div class="cov-grid">
-      <div><label>Carrier</label>${carrierDatalist}
-        <input list="dl_carrier_${id}" value="${esc(carrier)}" oninput="covCarrierInput(this,${id})" data-lid="${id}" placeholder="Carrier name"/></div>
-      <div><label>NAIC</label><input id="naic_${id}" value="${esc(naic)}" ${naicRO} placeholder="NAIC #"/></div>
-      <div><label>Policy #</label><input id="pnum_${id}" value="${esc(pnum)}" placeholder="Policy number"/></div>
-      <div></div>
-      <div><label>Effective date</label><input id="eff_${id}" type="date" value="${eff}"/></div>
-      <div><label>Expiration date</label><input id="exp_${id}" type="date" value="${exp}"/></div>
-    </div>`;
-  let typeHTML = '';
-  if (type === 'al') {
-    const csl = data && data.limits ? (data.limits.CSL||'') : '1000000';
-    const autos = data && data.autos ? data.autos : [];
-    const autoTypes = ['SCHEDULED','HIRED','NON-OWNED','ANY AUTO','OWNED'];
-    const checks = autoTypes.map(a=>`<label class="cb-item"><input type="checkbox" value="${a}" ${autos.includes(a)?'checked':''}> ${a}</label>`).join('');
-    typeHTML = `<div class="cov-grid" style="margin-top:8px"><div><label>CSL Limit</label><input id="csl_${id}" value="${csl}" placeholder="1000000"/></div><div></div></div>
-    <div style="margin-top:6px"><label style="font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--slate)">Auto types</label>
-      <div class="cb-group" id="autos_${id}">${checks}</div></div>`;
-  } else if (type === 'gl') {
-    const lims = data && data.limits ? data.limits : {};
-    const rows = _glLabels.map((lbl,i)=>`<div class="cov-grid" style="margin-top:4px"><div><label>${lbl}</label><input id="gl_${id}_${i}" value="${lims[lbl]!==undefined?lims[lbl]:_glDefaults[i]}" placeholder="${_glDefaults[i]}"/></div><div></div></div>`).join('');
-    typeHTML = `<div style="margin-top:8px">${rows}</div>`;
-  } else if (type === 'mtc') {
-    const lim = data && data.limits ? (data.limits.Limit||'') : '100000';
-    const ded = data ? (data.deductible!==undefined?data.deductible:'') : '';
-    typeHTML = `<div class="cov-grid" style="margin-top:8px">
-      <div><label>Limit</label><input id="mtclim_${id}" value="${lim}" placeholder="100000"/></div>
-      <div><label>Deductible (optional)</label><input id="mtcded_${id}" value="${ded}" placeholder=""/></div></div>`;
-  } else {
-    const lineName = data ? (data.line||'') : '';
-    const limRows = data && data.limits ? Object.entries(data.limits) : [];
-    let limHtml = limRows.map(([lbl,amt],i)=>`<div class="lim-row"><input id="ollbl_${id}_${i}" value="${esc(lbl)}" placeholder="Label"/><input id="olamt_${id}_${i}" value="${amt}" placeholder="Amount" type="number"/><button type="button" onclick="this.closest('.lim-row').remove()" style="background:none;border:none;cursor:pointer;color:var(--stop)">✕</button></div>`).join('');
-    typeHTML = `<div class="cov-grid" style="margin-top:8px"><div><label>Line name</label><input id="olname_${id}" value="${esc(lineName)}" placeholder="e.g. Umbrella"/></div><div></div></div>
-    <div id="ollims_${id}" style="margin-top:6px">${limHtml}</div>
-    <button type="button" class="lim-add" onclick="covAddLimRow(${id})">+ add limit row</button>`;
+  const carrier = data.carrier || '';
+  const naic = data.naic || '';
+  const policyNumber = data.policy_number || '';
+  const effective = mmddyyToISO(data.eff || '');
+  const expiration = mmddyyToISO(data.exp || '');
+  const typeLabel = type==='al' ? 'Auto Liability'
+    : type==='gl' ? 'General Liability'
+    : type==='mtc' ? 'Motor Truck Cargo'
+    : 'Other';
+
+  const line = editorElement('div', {id:`covline_${id}`, className:'cov-line'});
+  line.dataset.type = type;
+  line.dataset.orig = JSON.stringify(data);
+
+  const header = editorElement('div', {className:'cov-line-header'});
+  const title = editorElement('span', {text:typeLabel});
+  const remove = editorElement('button', {text:'Remove', type:'button', className:'act b-stop'});
+  remove.style.cssText = 'font-size:11px;padding:3px 8px';
+  remove.addEventListener('click', () => covRemoveLine(id));
+  header.append(title, remove);
+  line.appendChild(header);
+
+  const shared = editorElement('div', {className:'cov-grid'});
+  const carrierInput = editorElement('input', {value:carrier, placeholder:'Carrier name'});
+  carrierInput.setAttribute('list', `dl_carrier_${id}`);
+  carrierInput.dataset.lid = String(id);
+  carrierInput.addEventListener('input', () => covCarrierInput(carrierInput, id));
+  const carrierField = editorField('Carrier', carrierInput);
+  const datalist = editorElement('datalist', {id:`dl_carrier_${id}`});
+  Object.keys(CARRIER_NAIC).forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    datalist.appendChild(option);
+  });
+  carrierField.insertBefore(datalist, carrierInput);
+
+  const naicInput = editorElement('input', {id:`naic_${id}`, value:naic, placeholder:'NAIC #'});
+  if (carrier && CARRIER_NAIC[carrier]) {
+    naicInput.readOnly = true;
+    naicInput.className = 'naic-locked';
   }
-  const orig = data ? JSON.stringify(data) : '{}';
-  const typeLabel = type==='al'?'Auto Liability':type==='gl'?'General Liability':type==='mtc'?'Motor Truck Cargo':'Other';
-  return `<div class="cov-line" id="covline_${id}" data-type="${type}" data-orig='${orig.replace(/'/g,"&#39;")}'>
-    <div class="cov-line-header"><span>${typeLabel}</span>
-      <button type="button" class="act b-stop" style="font-size:11px;padding:3px 8px" onclick="covRemoveLine(${id})">Remove</button></div>
-    ${sharedFields}${typeHTML}
-  </div>`;
+  const policyInput = editorElement('input', {id:`pnum_${id}`, value:policyNumber, placeholder:'Policy number'});
+  const effectiveInput = editorElement('input', {id:`eff_${id}`, type:'date', value:effective});
+  const expirationInput = editorElement('input', {id:`exp_${id}`, type:'date', value:expiration});
+  shared.append(
+    carrierField,
+    editorField('NAIC', naicInput),
+    editorField('Policy #', policyInput),
+    document.createElement('div'),
+    editorField('Effective date', effectiveInput),
+    editorField('Expiration date', expirationInput)
+  );
+  line.appendChild(shared);
+
+  if (type === 'al') {
+    const limit = data.limits ? (data.limits.CSL ?? '') : '1000000';
+    const autos = Array.isArray(data.autos) ? data.autos : [];
+    const grid = editorElement('div', {className:'cov-grid', style:'margin-top:8px'});
+    grid.append(
+      editorField('CSL Limit', editorElement('input', {
+        id:`csl_${id}`, value:limit, placeholder:'1000000'
+      })),
+      document.createElement('div')
+    );
+    line.appendChild(grid);
+
+    const autosWrap = editorElement('div', {style:'margin-top:6px'});
+    const autosLabel = editorElement('label', {text:'Auto types'});
+    autosLabel.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--slate)';
+    const checkboxGroup = editorElement('div', {id:`autos_${id}`, className:'cb-group'});
+    ['SCHEDULED','HIRED','NON-OWNED','ANY AUTO','OWNED'].forEach(autoType => {
+      const label = editorElement('label', {className:'cb-item'});
+      const checkbox = editorElement('input', {type:'checkbox', value:autoType});
+      checkbox.checked = autos.includes(autoType);
+      label.append(checkbox, document.createTextNode(' ' + autoType));
+      checkboxGroup.appendChild(label);
+    });
+    autosWrap.append(autosLabel, checkboxGroup);
+    line.appendChild(autosWrap);
+  } else if (type === 'gl') {
+    const limits = data.limits || {};
+    const limitsWrap = editorElement('div', {style:'margin-top:8px'});
+    _glLabels.forEach((labelText, index) => {
+      const grid = editorElement('div', {className:'cov-grid', style:'margin-top:4px'});
+      grid.append(
+        editorField(labelText, editorElement('input', {
+          id:`gl_${id}_${index}`,
+          value:limits[labelText] !== undefined ? limits[labelText] : _glDefaults[index],
+          placeholder:_glDefaults[index]
+        })),
+        document.createElement('div')
+      );
+      limitsWrap.appendChild(grid);
+    });
+    line.appendChild(limitsWrap);
+  } else if (type === 'mtc') {
+    const limit = data.limits ? (data.limits.Limit ?? '') : '100000';
+    const deductible = data.deductible !== undefined ? data.deductible : '';
+    const grid = editorElement('div', {className:'cov-grid', style:'margin-top:8px'});
+    grid.append(
+      editorField('Limit', editorElement('input', {
+        id:`mtclim_${id}`, value:limit, placeholder:'100000'
+      })),
+      editorField('Deductible (optional)', editorElement('input', {
+        id:`mtcded_${id}`, value:deductible, placeholder:''
+      }))
+    );
+    line.appendChild(grid);
+  } else {
+    const nameGrid = editorElement('div', {className:'cov-grid', style:'margin-top:8px'});
+    nameGrid.append(
+      editorField('Line name', editorElement('input', {
+        id:`olname_${id}`, value:data.line || '', placeholder:'e.g. Umbrella'
+      })),
+      document.createElement('div')
+    );
+    line.appendChild(nameGrid);
+
+    const limitsWrap = editorElement('div', {id:`ollims_${id}`, style:'margin-top:6px'});
+    Object.entries(data.limits || {}).forEach(([labelValue, amountValue], index) => {
+      limitsWrap.appendChild(buildLimitRowNode(id, index, labelValue, amountValue));
+    });
+    line.appendChild(limitsWrap);
+
+    const addLimit = editorElement('button', {text:'+ add limit row', type:'button', className:'lim-add'});
+    addLimit.addEventListener('click', () => covAddLimRow(id));
+    line.appendChild(addLimit);
+  }
+
+  return line;
 }
  
-function covAddLine(type) { document.getElementById('covLines').insertAdjacentHTML('beforeend', buildLineHTML(type, null)); }
+function covAddLine(type) {
+  document.getElementById('covLines').appendChild(buildLineNode(type, null));
+}
 function covRemoveLine(id) { const el=document.getElementById('covline_'+id); if(el) el.remove(); }
 function covCarrierInput(inp, id) {
   const val = inp.value;
@@ -320,7 +439,7 @@ function covCarrierInput(inp, id) {
 function covAddLimRow(id) {
   const container = document.getElementById('ollims_'+id);
   const i = container.querySelectorAll('.lim-row').length;
-  container.insertAdjacentHTML('beforeend', `<div class="lim-row"><input id="ollbl_${id}_${i}" placeholder="Label"/><input id="olamt_${id}_${i}" placeholder="Amount" type="number"/><button type="button" onclick="this.closest('.lim-row').remove()" style="background:none;border:none;cursor:pointer;color:var(--stop)">✕</button></div>`);
+  container.appendChild(buildLimitRowNode(id, i));
 }
 function covToggleRaw() {
   const rs=document.getElementById('rawSection'); const btn=document.getElementById('rawToggleBtn');
@@ -329,18 +448,37 @@ function covToggleRaw() {
 }
  
 // ---- Vehicles / Trailers + Drivers (ACORD 101 schedule) ----
-function vehRowHTML(d){
-  d=d||{}; const vid='v'+Date.now()+Math.random().toString(36).slice(2,6);
+function buildVehicleRowNode(d){
+  d=d||{};
   const known=['vin','value','description'];
   const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
-  return `<div class="veh-row" data-extra='${JSON.stringify(extra).replace(/'/g,"&#39;")}' style="display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end">
-    <div><label style="font-size:10px">Year / Make / Description</label><input class="veh-desc" value="${esc(d.description||'')}" placeholder="2015 Kenworth T680"/></div>
-    <div><label style="font-size:10px">VIN</label><input class="veh-vin" value="${esc(d.vin||'')}" placeholder="1XKYDP8X3FJ422580"/></div>
-    <div><label style="font-size:10px">Stated value $</label><input class="veh-val" type="number" min="0" step="1" value="${d.value!=null?d.value:''}"/></div>
-    <button type="button" class="act b-stop" onclick="this.closest('.veh-row').remove()" style="font-size:11px">✕</button>
-  </div>`;
+  const row = editorElement('div', {
+    className:'veh-row',
+    style:'display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end'
+  });
+  row.dataset.extra = JSON.stringify(extra);
+  const description = editorElement('input', {
+    className:'veh-desc', value:d.description || '', placeholder:'2015 Kenworth T680'
+  });
+  const vin = editorElement('input', {
+    className:'veh-vin', value:d.vin || '', placeholder:'1XKYDP8X3FJ422580'
+  });
+  const value = editorElement('input', {
+    className:'veh-val', type:'number', value:d.value != null ? d.value : ''
+  });
+  value.min='0'; value.step='1';
+  const remove = editorElement('button', {text:'✕', type:'button', className:'act b-stop'});
+  remove.style.cssText='font-size:11px';
+  remove.addEventListener('click', () => row.remove());
+  row.append(
+    editorField('Year / Make / Description', description, 'font-size:10px'),
+    editorField('VIN', vin, 'font-size:10px'),
+    editorField('Stated value $', value, 'font-size:10px'),
+    remove
+  );
+  return row;
 }
-function vehAddRow(d){ document.getElementById('vehLines').insertAdjacentHTML('beforeend', vehRowHTML(d)); }
+function vehAddRow(d){ document.getElementById('vehLines').appendChild(buildVehicleRowNode(d)); }
 function assembleVehicles(){
   const out=[];
   for(const row of document.querySelectorAll('#vehLines .veh-row')){
@@ -355,17 +493,39 @@ function assembleVehicles(){
   }
   return out;
 }
-function drvRowHTML(d){
+function buildDriverRowNode(d){
   d=d||{}; const known=['first','last','lic_state'];
   const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
-  return `<div class="drv-row" data-extra='${JSON.stringify(extra).replace(/'/g,"&#39;")}' style="display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end">
-    <div><label style="font-size:10px">First</label><input class="drv-first" value="${esc(d.first||'')}" placeholder="FRANK"/></div>
-    <div><label style="font-size:10px">Last</label><input class="drv-last" value="${esc(d.last||'')}" placeholder="BRAXTON"/></div>
-    <div><label style="font-size:10px">Lic. state</label><input class="drv-state" maxlength="2" value="${esc(d.lic_state||'')}" placeholder="GA"/></div>
-    <button type="button" class="act b-stop" onclick="this.closest('.drv-row').remove()" style="font-size:11px">✕</button>
-  </div>`;
+  const row = editorElement('div', {
+    className:'drv-row',
+    style:'display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end'
+  });
+  row.dataset.extra = JSON.stringify(extra);
+  const first = editorElement('input', {className:'drv-first', value:d.first || '', placeholder:'FRANK'});
+  const last = editorElement('input', {className:'drv-last', value:d.last || '', placeholder:'BRAXTON'});
+  const state = editorElement('input', {className:'drv-state', value:d.lic_state || '', placeholder:'GA'});
+  state.maxLength=2;
+  const remove = editorElement('button', {text:'✕', type:'button', className:'act b-stop'});
+  remove.style.cssText='font-size:11px';
+  remove.addEventListener('click', () => row.remove());
+  row.append(
+    editorField('First', first, 'font-size:10px'),
+    editorField('Last', last, 'font-size:10px'),
+    editorField('Lic. state', state, 'font-size:10px'),
+    remove
+  );
+  return row;
 }
-function drvAddRow(d){ document.getElementById('drvLines').insertAdjacentHTML('beforeend', drvRowHTML(d)); }
+function drvAddRow(d){ document.getElementById('drvLines').appendChild(buildDriverRowNode(d)); }
+
+$("addAutoLiability").addEventListener('click', () => covAddLine('al'));
+$("addGeneralLiability").addEventListener('click', () => covAddLine('gl'));
+$("addMotorTruckCargo").addEventListener('click', () => covAddLine('mtc'));
+$("addOtherCoverage").addEventListener('click', () => covAddLine('other'));
+$("rawToggleBtn").addEventListener('click', covToggleRaw);
+$("addVehicle").addEventListener('click', () => vehAddRow());
+$("addDriver").addEventListener('click', () => drvAddRow());
+
 function assembleDrivers(){
   const out=[];
   for(const row of document.querySelectorAll('#drvLines .drv-row')){
@@ -443,27 +603,27 @@ window.editPolicy = (p) => {
   $("f_exp").value=p.expiration_date; $("f_addr").value=p.insured_address; $("f_asof").value=p.data_current_as_of;
   $("f_producer").value=p.producer_block;
   $("f_cov").value=""; $("f_carriers").value="";
-  document.getElementById('covLines').innerHTML='';
+  document.getElementById('covLines').replaceChildren();
   for (const c of (p.carriers||[])) {
     let type='other';
     const ln=(c.line||'').toLowerCase();
     if(ln.includes('auto liability')) type='al';
     else if(ln.includes('general liability')) type='gl';
     else if(ln.includes('motor truck cargo')) type='mtc';
-    document.getElementById('covLines').insertAdjacentHTML('beforeend', buildLineHTML(type, c));
+    document.getElementById('covLines').appendChild(buildLineNode(type, c));
   }
-  document.getElementById('vehLines').innerHTML='';
+  document.getElementById('vehLines').replaceChildren();
   for (const v of (p.trailers||[])) vehAddRow(v);
-  document.getElementById('drvLines').innerHTML='';
+  document.getElementById('drvLines').replaceChildren();
   for (const d of (p.drivers||[])) drvAddRow(d);
   window.scrollTo({top:0,behavior:"smooth"});
 };
-$("clearForm").onclick=()=>{
+$("clearForm").addEventListener('click', ()=>{
   ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value="");
-  document.getElementById('covLines').innerHTML=''; $("f_cov").value=''; $("f_carriers").value='';
-  document.getElementById('vehLines').innerHTML=''; document.getElementById('drvLines').innerHTML='';
-};
-$("savePolicy").onclick = async ()=>{
+  document.getElementById('covLines').replaceChildren(); $("f_cov").value=''; $("f_carriers").value='';
+  document.getElementById('vehLines').replaceChildren(); document.getElementById('drvLines').replaceChildren();
+});
+$("savePolicy").addEventListener('click', async ()=>{
   $("polErr").textContent="";
   const {coverages, carriers, err}=assembleCovData();
   if (err){$("polErr").textContent=err; return;}
@@ -480,7 +640,7 @@ $("savePolicy").onclick = async ()=>{
     await api("/admin/policies",{method:"POST",body:JSON.stringify(body)});
     $("clearForm").click(); await loadPolicies();
   }catch(e){ $("polErr").textContent="Save failed: "+e.message; }
-};
+});
  
 window.toggleServe=async(id,on)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({self_serve_enabled:on})}); loadPolicies(); };
 window.setStatus=async(id,s)=>{ await api(`/admin/policies/${id}/status`,{method:"POST",body:JSON.stringify({status:s})}); loadPolicies(); };
@@ -493,39 +653,63 @@ window.reqStatus=async(id,s)=>{ await api(`/admin/special-requests/${id}/status`
  
 async function loadCerts(){
   const rows = await api("/admin/certificates");
-  $("certTable").innerHTML = "<tr><th>Issued</th><th>Cert #</th><th>Holder</th><th>By</th></tr>" +
-    rows.map(r=>`<tr><td>${new Date(r.issued_at).toLocaleString()}</td><td>${esc(r.cert_number)}</td>
-      <td>${esc(r.holder_name)}</td><td>${esc(r.issued_by)}</td></tr>`).join("") ||
-      "<tr><td class='muted'>No certificates issued yet.</td></tr>";
+  PinnacleRender.renderCertificates(rows);
 }
 async function loadAudit(){
   const rows = await api('/admin/audit');
   PinnacleRender.renderAudit(rows);
 }
- 
-$("nc_submit").onclick = async () => {
+
+function showCustomerMessage(message, className='err') {
+  const result = $("nc_result");
+  result.replaceChildren();
+  const line = document.createElement('span');
+  line.className = className;
+  line.textContent = message;
+  result.appendChild(line);
+}
+
+function showCustomerCreated(data) {
+  const result = $("nc_result");
+  result.replaceChildren();
+  const created = document.createElement('div');
+  created.style.marginTop = '6px';
+  created.textContent = 'Customer created.';
+  const email = document.createElement('div');
+  email.append('Email: ');
+  const emailCode = document.createElement('code');
+  emailCode.textContent = data.email || '';
+  email.appendChild(emailCode);
+  const client = document.createElement('div');
+  client.append('Client ID: ');
+  const clientCode = document.createElement('code');
+  clientCode.textContent = data.client_id || '';
+  client.appendChild(clientCode);
+  const note = document.createElement('div');
+  note.className = 'muted';
+  note.style.marginTop = '6px';
+  note.textContent = 'Deliver the password to the customer securely.';
+  result.append(created, email, client, note);
+}
+
+$("nc_submit").addEventListener('click', async () => {
   const emailVal = $("nc_email").value.trim();
   const nameVal = $("nc_name").value.trim();
     const passVal = $("nc_pass").value;
-    if(!emailVal || !nameVal || !passVal){ $("nc_result").innerHTML = '<span style="color:#c0392b">Email, named insured, and password are all required.</span>'; return; }
-    if(passVal.length < 8){ $("nc_result").innerHTML = '<span style="color:#c0392b">Password must be at least 8 characters.</span>'; return; }
-  if (!emailVal || !nameVal) { $("nc_result").innerHTML = '<span class="err">Email and name are required.</span>'; return; }
+    if(!emailVal || !nameVal || !passVal){ showCustomerMessage('Email, named insured, and password are all required.'); return; }
+    if(passVal.length < 8){ showCustomerMessage('Password must be at least 8 characters.'); return; }
   $("nc_result").textContent = "Creating…";
   try {
     const data = await api("/admin/customers", {
       method: "POST",
       body: JSON.stringify({ email: emailVal, insured_name: nameVal, password: passVal })
     });
-        $("nc_result").innerHTML =
-      '<div style="margin-top:6px">Customer created.</div>' +
-      '<div>Email: <code>' + esc(data.email) + '</code></div>' +
-      '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
-      '<div class="muted" style="margin-top:6px">Deliver the password to the customer securely.</div>';
+    showCustomerCreated(data);
     // Auto-fill the policy form
     $("f_client").value = data.client_id;
-    $("f_insured").value = esc(nameVal);
-  } catch(e) { $("nc_result").innerHTML = '<span class="err">Error: ' + e.message + '</span>'; }
-};
+    $("f_insured").value = nameVal;
+  } catch(e) { showCustomerMessage('Error: ' + e.message); }
+});
  
 // keep session across refresh
 sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.access_token; boot(); }});
@@ -534,21 +718,27 @@ sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.acces
 <script>
 /* Pinnacle additive: Power Units section + NHTSA VIN decoder. Non-invasive. */
 (function(){
-  window.puRowHTML=function(v){v=v||{};
-    return '<div class="pu-row" style="display:flex;gap:6px;margin-bottom:6px;align-items:center">'
-      +'<input class="pu-desc" placeholder="Year Make Model (auto)" value="'+(v.description||'').replace(/"/g,'&quot;')+'" style="flex:2"/>'
-      +'<input class="pu-vin" placeholder="VIN" value="'+(v.vin||'').replace(/"/g,'&quot;')+'" style="flex:2"/>'
-      +'<input class="pu-val" type="number" placeholder="Value" value="'+(v.value!=null?v.value:'')+'" style="flex:1"/>'
-      +'<button type="button" class="act b-ghost pu-decode" style="font-size:11px">Decode</button>'
-      +'<button type="button" class="act b-stop pu-del" style="font-size:11px">×</button>'
-      +'</div>';
+  window.buildPowerUnitRowNode=function(v){v=v||{};
+    var row=document.createElement('div'); row.className='pu-row';
+    row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center';
+    var desc=document.createElement('input'); desc.className='pu-desc'; desc.placeholder='Year Make Model (auto)';
+    desc.value=v.description||''; desc.style.flex='2';
+    var vin=document.createElement('input'); vin.className='pu-vin'; vin.placeholder='VIN';
+    vin.value=v.vin||''; vin.style.flex='2';
+    var val=document.createElement('input'); val.className='pu-val'; val.type='number'; val.placeholder='Value';
+    val.value=v.value!=null?String(v.value):''; val.style.flex='1';
+    var decode=document.createElement('button'); decode.type='button'; decode.className='act b-ghost pu-decode';
+    decode.textContent='Decode'; decode.style.fontSize='11px';
+    var remove=document.createElement('button'); remove.type='button'; remove.className='act b-stop pu-del';
+    remove.textContent='×'; remove.style.fontSize='11px';
+    row.append(desc,vin,val,decode,remove); return row;
   };
-  window.puAddRow=function(v){var c=document.getElementById('puLines'); if(c) c.insertAdjacentHTML('beforeend', puRowHTML(v||{}));};
+  window.puAddRow=function(v){var c=document.getElementById('puLines'); if(c) c.appendChild(buildPowerUnitRowNode(v||{}));};
   window.assemblePowerUnits=function(){var out=[]; document.querySelectorAll('#puLines .pu-row').forEach(function(r){
     var d=(r.querySelector('.pu-desc')||{}).value||''; var vin=(r.querySelector('.pu-vin')||{}).value||''; var val=(r.querySelector('.pu-val')||{}).value||'';
     d=d.trim(); vin=vin.trim(); if(d||vin) out.push({description:d, vin:vin, value: val!==''?Number(val):0});
   }); return out;};
-  function puLoad(p){var c=document.getElementById('puLines'); if(!c) return; c.innerHTML=''; ((p&&p.vehicles)||[]).forEach(function(v){puAddRow(v);});}
+  function puLoad(p){var c=document.getElementById('puLines'); if(!c) return; c.replaceChildren(); ((p&&p.vehicles)||[]).forEach(function(v){puAddRow(v);});}
   async function decodeVin(vin){vin=(vin||'').trim(); if(vin.length<8) return null;
     var r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/'+encodeURIComponent(vin)+'?format=json');
     var j=await r.json(); var d=(j.Results&&j.Results[0])||{};
@@ -571,15 +761,19 @@ sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.acces
     var mu=vl.previousElementSibling; var lab=mu&&mu.previousElementSibling; var anchor=lab||vl;
     if(lab&&/vehicle|trailer/i.test(lab.textContent||'')) lab.textContent='Trailers (VIN schedule)';
     var wrap=document.createElement('div'); wrap.id='puSection';
-    wrap.innerHTML='<label style="font-size:12px;color:#9fb3c8;margin:14px 0 4px;display:block">Power units / trucks</label>'
-      +'<div class="muted" style="font-size:11px;margin-bottom:6px">Enter a VIN and click Decode (or tab out) to auto-fill Year/Make/Model via NHTSA. Prints under POWER UNITS on the ACORD 101.</div>'
-      +'<div id="puLines"></div>';
+    var title=document.createElement('label'); title.textContent='Power units / trucks';
+    title.style.cssText='font-size:12px;color:#9fb3c8;margin:14px 0 4px;display:block';
+    var help=document.createElement('div'); help.className='muted';
+    help.style.cssText='font-size:11px;margin-bottom:6px';
+    help.textContent='Enter a VIN and click Decode (or tab out) to auto-fill Year/Make/Model via NHTSA. Prints under POWER UNITS on the ACORD 101.';
+    var lines=document.createElement('div'); lines.id='puLines';
+    wrap.append(title,help,lines);
     var btn=document.createElement('button'); btn.type='button'; btn.className='act b-ghost'; btn.textContent='+ Add power unit'; btn.style.cssText='font-size:11px;margin-bottom:6px';
     btn.addEventListener('click', function(){puAddRow();});
     anchor.parentNode.insertBefore(wrap, anchor);
     anchor.parentNode.insertBefore(btn, anchor);
     if(typeof window.editPolicy==='function'){ var _o=window.editPolicy; window.editPolicy=function(p){ _o(p); try{puLoad(p);}catch(e){} }; }
-    var cf=document.getElementById('clearForm'); if(cf) cf.addEventListener('click', function(){var c=document.getElementById('puLines'); if(c) c.innerHTML='';});
+    var cf=document.getElementById('clearForm'); if(cf) cf.addEventListener('click', function(){var c=document.getElementById('puLines'); if(c) c.replaceChildren();});
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', build); else build();
 })();
