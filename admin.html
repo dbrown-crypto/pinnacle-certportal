@@ -90,7 +90,7 @@
         </div>
         <div style="margin-top:8px">
           <label>Password</label>
-          <input id="nc_pass" type="text" placeholder="Set the customer's password"/>
+          <input id="nc_pass" type="password" autocomplete="new-password" placeholder="Set the customer's password"/>
           <div class="muted" style="margin-top:4px">Min 8 characters. Deliver to the customer; they can change it after first login.</div>
         </div>
         <button class="act b-gold" id="nc_submit" style="margin-top:10px">Create customer</button>
@@ -111,7 +111,7 @@
         </div>
         <label>Producer block (prints on cert)</label><textarea id="f_producer">Pinnacle Risk Advisors LLC
 2700 Cumberland Pkwy SE, Ste 410, Atlanta, GA 30339
-(943) 239-3439  certs@pinnacleriskad.com</textarea>
+(770) 758-3197  certs@pinnacleriskad.com</textarea>
         <!-- Coverage Builder -->
         <label style="font-weight:600;margin-bottom:4px;display:block">Coverage Lines</label>
         <div class="cov-add-btns" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
@@ -202,7 +202,7 @@ async function boot(){
   catch(e){ $("polErr").textContent = "You're signed in but not on the admin allowlist. Add your user id to ADMIN_USER_IDS."; }
 }
  
-function esc(s){return (s??"").toString().replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))}
+function esc(s){return String(s??'').replace(/[&<>"'`=\/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','=':'&#61;','/':'&#47;'})[c]);}
  
 async function loadPolicies(){
   const rows = await api("/admin/policies");
