@@ -28,14 +28,14 @@ from __future__ import annotations
 import os
 import base64
 import datetime as dt
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 import jwt
 from jwt import PyJWKClient
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from gate import (
     evaluate_gate, PolicySnapshot, CertRequest, PolicyStatus, SpecialWording, GateResult,
@@ -50,7 +50,12 @@ MAIL_FROM = os.environ.get("MAIL_FROM", "Pinnacle Risk Advisors <certs@pinnacler
 AGENT_EMAIL = os.environ.get("AGENT_NOTIFY_EMAIL", "dbrown@pinnacleriskad.com")
 TEMPLATE_PATH = os.environ.get("ACORD25_TEMPLATE_PATH") or None
 SIGNATURE_PATH = os.environ.get("SIGNATURE_PNG_PATH") or None
-ALLOWED_ORIGINS = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+DEFAULT_ALLOWED_ORIGIN = "https://coi.pinnacleriskad.com"
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGIN).split(",")
+    if o.strip()
+] or [DEFAULT_ALLOWED_ORIGIN]
 
 # Supabase now signs auth tokens with asymmetric keys (ES256) by default. We
 # verify them against the project's public JWKS. Legacy HS256 shared-secret
@@ -71,7 +76,7 @@ class IssueRequest(BaseModel):
     holder_address: str
     holder_email: Optional[str] = None
     description_of_operations: str = ""
-    requested_special_wording: list[str] = []   # values from SpecialWording enum
+    requested_special_wording: list[SpecialWording] = Field(default_factory=list)
 
 
 # --- auth ---------------------------------------------------------------------
@@ -150,7 +155,7 @@ async def send_certificate_email(to: list[str], cert_number: str, insured: str, 
             f"issued by Pinnacle Risk Advisors.\n\n"
             f"Certificate number: {cert_number}\n"
             f"This certificate is issued as a matter of information only.\n\n"
-            f"Pinnacle Risk Advisors LLC · (943) 239-3439 · dbrown@pinnacleriskad.com"
+            f"Pinnacle Risk Advisors LLC · (770) 758-3197 · dbrown@pinnacleriskad.com"
         ),
         "attachments": [{
             "filename": f"COI_{cert_number}.pdf",
@@ -173,7 +178,7 @@ async def notify_agent_special(req: IssueRequest, policy: dict):
             f"Insured: {policy['named_insured']}\n"
             f"Holder:  {req.holder_name}\n         {req.holder_address}\n"
             f"Email:   {req.holder_email or '—'}\n"
-            f"Wording: {', '.join(req.requested_special_wording)}\n"
+            f"Wording: {', '.join(w.value for w in req.requested_special_wording)}\n"
             f"Ops:     {req.description_of_operations}\n\n"
             f"Open it in the admin queue to review and send."
         ),
@@ -231,7 +236,7 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
         holder_address=body.holder_address,
         holder_email=body.holder_email,
         description_of_operations=body.description_of_operations,
-        requested_special_wording=[SpecialWording(w) for w in body.requested_special_wording],
+        requested_special_wording=list(body.requested_special_wording),
     )
 
     result = evaluate_gate(_to_snapshot(policy), req)
@@ -243,7 +248,7 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
             "policy_id": policy["id"], "client_id": user_id,
             "holder_name": req.holder_name, "holder_address": req.holder_address,
             "holder_email": req.holder_email,
-            "requested_wording": body.requested_special_wording,
+            "requested_wording": [w.value for w in body.requested_special_wording],
             "notes": req.description_of_operations,
         })
         if RESEND_KEY:
@@ -419,12 +424,14 @@ async def admin_special(authorization: Optional[str] = Header(None)):
     return await sb_get("special_requests", {"select": "*", "order": "created_at.desc"})
 
 
+class SpecialStatusPatch(BaseModel):
+    status: Literal["open", "in_progress", "sent", "declined"]
+
+
 @app.post("/admin/special-requests/{req_id}/status")
-async def admin_special_status(req_id: str, body: dict, authorization: Optional[str] = Header(None)):
+async def admin_special_status(req_id: str, body: SpecialStatusPatch, authorization: Optional[str] = Header(None)):
     require_admin(authorization)
-    status = body.get("status")
-    if status not in ("open", "in_progress", "sent", "declined"):
-        raise HTTPException(400, "Invalid status.")
+    status = body.status
     return (await sb_patch("special_requests", {"id": req_id}, {"status": status}))[0]
 
 
@@ -503,7 +510,7 @@ async def admin_create_customer(
     # Upsert clients row — id MUST equal auth user UUID
     await sb_upsert("clients", {"id": uid, "insured_name": name, "email": email})
 
-    return {"client_id": uid, "email": email, "password": password}
+    return {"client_id": uid, "email": email}
 
 def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
     """Map stored data -> your ACORD 25 field names. Discover the names once

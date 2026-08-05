@@ -31,7 +31,9 @@ import datetime as dt
 from typing import Optional
 
 from fastapi import Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from gate import SpecialWording
 
 # --- Approved wording templates (Derrick Brown, licensed agent) --------------
 WORDING_TEMPLATES = {
@@ -68,7 +70,7 @@ class AdminIssueRequest(BaseModel):
     holder_address: str
     holder_email: Optional[str] = None
     description_of_operations: str = ""
-    requested_special_wording: list[str] = []
+    requested_special_wording: list[SpecialWording] = Field(default_factory=list)
     wording_line: str = "General Liability"
     custom_wording: Optional[str] = None
     confirm_wording: bool = False
