@@ -1,7 +1,7 @@
 /* ============================================================================
  * admin-render.js — safe DOM builders for the Pinnacle Certificate Admin
  *
- * Replaces the innerHTML-based row builders in admin.html.
+ * Replaces the HTML-string row builders in admin.html.
  *
  * Design rule: database values NEVER become HTML. They are assigned through
  * textContent, which cannot create elements or execute script. There is no
@@ -125,7 +125,7 @@ function renderPolicies(rows, handlers) {
 /* Original: When | Holder | Wording | Status | actions
  *
  * This is the table that carried the stored-XSS path: requested_wording is
- * customer-submitted free text and was previously joined into innerHTML
+ * customer-submitted free text and was previously parsed as HTML
  * WITHOUT escaping, while the holder fields around it were escaped. Here every
  * field goes through textContent, so the distinction no longer matters.
  *
@@ -179,6 +179,32 @@ function renderQueue(rows, handlers) {
     }
     tr.appendChild(actions);
 
+    body.appendChild(tr);
+  });
+}
+
+/* --- issued certificates ------------------------------------------------- */
+function renderCertificates(rows) {
+  const table = document.getElementById('certTable');
+  if (!table) return;
+  const body = tbodyOf(table);
+  clear(body);
+
+  body.appendChild(headerRow(['Issued', 'Cert #', 'Holder', 'By']));
+
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    tr.appendChild(td('No certificates issued yet.', 'muted'));
+    body.appendChild(tr);
+    return;
+  }
+
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.appendChild(td(r.issued_at ? new Date(r.issued_at).toLocaleString() : ''));
+    tr.appendChild(td(r.cert_number));
+    tr.appendChild(td(r.holder_name));
+    tr.appendChild(td(r.issued_by));
     body.appendChild(tr);
   });
 }
@@ -246,6 +272,7 @@ function renderAudit(rows) {
 window.PinnacleRender = {
   renderPolicies,
   renderQueue,
+  renderCertificates,
   renderAudit,
   auditPillClass,
   el, td, button, pill, clear
