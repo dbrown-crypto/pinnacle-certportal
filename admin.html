@@ -516,11 +516,11 @@ $("nc_submit").onclick = async () => {
       method: "POST",
       body: JSON.stringify({ email: emailVal, insured_name: nameVal, password: passVal })
     });
-    $("nc_result").innerHTML =
+        $("nc_result").innerHTML =
       '<div style="margin-top:6px">Customer created.</div>' +
       '<div>Email: <code>' + esc(data.email) + '</code></div>' +
-            '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
-              <div class="muted" style="margin-top:6px">Deliver the email and password to the customer.</div>
+      '<div>Client ID: <code>' + esc(data.client_id) + '</code></div>' +
+      '<div class="muted" style="margin-top:6px">Deliver the password to the customer securely.</div>';
     // Auto-fill the policy form
     $("f_client").value = data.client_id;
     $("f_insured").value = esc(nameVal);
