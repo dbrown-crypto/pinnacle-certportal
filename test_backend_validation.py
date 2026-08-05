@@ -249,5 +249,121 @@ repo_old = os.popen(
 ).read().strip()
 check("old phone absent repo-wide", repo_old == "0")
 
+print("== admin issue-on-behalf endpoint validation ==")
+mai = load_main()
+import admin_issue as ai
+
+
+def admin_body(wording):
+    return {
+        "policy_id": "11111111-1111-1111-1111-111111111111",
+        "holder_name": "Acme Freight",
+        "holder_address": "1 Main St",
+        "requested_special_wording": wording,
+    }
+
+
+for w in VALID_WORDING:
+    try:
+        parsed = ai.AdminIssueRequest(**admin_body([w]))
+        ok = parsed.requested_special_wording == [gate.SpecialWording(w)]
+    except Exception:
+        ok = False
+    check(f"AdminIssueRequest accepts valid wording: {w}", ok)
+
+try:
+    parsed = ai.AdminIssueRequest(**admin_body(VALID_WORDING))
+    ok = [x.value for x in parsed.requested_special_wording] == VALID_WORDING
+except Exception:
+    ok = False
+check("AdminIssueRequest accepts all four wording values together", ok)
+
+check("AdminIssueRequest wording default is empty list",
+      ai.AdminIssueRequest(**{k: v for k, v in admin_body([]).items()
+                              if k != "requested_special_wording"}).requested_special_wording == [])
+
+try:
+    ai.AdminIssueRequest(**admin_body(["totally_made_up"]))
+    ok = False
+except Exception:
+    ok = True
+check("AdminIssueRequest rejects unknown wording at model level", ok)
+
+# Count every side effect reachable from the admin issue path.
+acalls = {"admin_auth": 0, "policy": 0, "audit": 0, "insert": 0, "patch": 0,
+          "upload": 0, "certgen": 0, "email": 0, "gate": 0}
+
+
+def _a_admin(auth):
+    acalls["admin_auth"] += 1
+    return "admin-uid"
+
+
+async def _a_policy(*a, **k):
+    acalls["policy"] += 1
+    return {}
+
+
+async def _a_audit(*a, **k):
+    acalls["audit"] += 1
+
+
+async def _a_insert(*a, **k):
+    acalls["insert"] += 1
+    return {}
+
+
+async def _a_patch(*a, **k):
+    acalls["patch"] += 1
+    return [{}]
+
+
+async def _a_upload(*a, **k):
+    acalls["upload"] += 1
+    return ""
+
+
+def _a_certgen(*a, **k):
+    acalls["certgen"] += 1
+    return b""
+
+
+async def _a_email(*a, **k):
+    acalls["email"] += 1
+
+
+def _a_gate(*a, **k):
+    acalls["gate"] += 1
+    raise AssertionError("gate should not run for an invalid request")
+
+
+mai.require_admin = _a_admin
+mai.load_policy = _a_policy
+mai.write_audit = _a_audit
+mai.sb_insert = _a_insert
+mai.sb_patch = _a_patch
+mai.storage_upload = _a_upload
+mai.generate_certificate = _a_certgen
+mai.send_certificate_email = _a_email
+mai.evaluate_gate = _a_gate
+
+cai = TestClient(mai.app)
+r = cai.post("/admin/issue-certificate", json=admin_body(["totally_made_up"]),
+             headers={"Authorization": "Bearer whatever"})
+check("admin endpoint rejects unknown wording -> 422", r.status_code == 422)
+check("admin rejection -> zero admin authorization calls", acalls["admin_auth"] == 0)
+check("admin rejection -> zero policy loads", acalls["policy"] == 0)
+check("admin rejection -> zero audit writes", acalls["audit"] == 0)
+check("admin rejection -> zero db inserts", acalls["insert"] == 0)
+check("admin rejection -> zero db patches", acalls["patch"] == 0)
+check("admin rejection -> zero storage uploads", acalls["upload"] == 0)
+check("admin rejection -> zero certificate generation", acalls["certgen"] == 0)
+check("admin rejection -> zero email calls", acalls["email"] == 0)
+check("admin rejection -> zero gate evaluations", acalls["gate"] == 0)
+
+r = cai.post("/admin/issue-certificate", json=admin_body(["<img src=x onerror=alert(1)>"]),
+             headers={"Authorization": "Bearer whatever"})
+check("admin endpoint rejects markup wording -> 422", r.status_code == 422)
+
 print(f"\nFINAL: {PASS} passed, {FAIL} failed, {PASS + FAIL} total")
 sys.exit(1 if FAIL else 0)
