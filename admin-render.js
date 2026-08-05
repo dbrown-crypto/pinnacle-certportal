@@ -183,9 +183,70 @@ function renderQueue(rows, handlers) {
   });
 }
 
+/* --- audit log ------------------------------------------------------------ */
+/* Original: When | Route | Holder | Codes
+ *
+ * `r.action` was previously interpolated into BOTH a class attribute and the
+ * cell text, unescaped. Attribute context is the dangerous one: a value
+ * containing a quote breaks out of class="..." and can add an event handler.
+ *
+ * Fix is not more escaping — the DB value never reaches className at all. It is
+ * mapped through an allowlist of the pill classes that actually exist in the
+ * stylesheet; anything unrecognised gets no state class. The raw action value
+ * is still SHOWN, as text, so nothing is hidden from the operator.
+ */
+const AUDIT_PILL_CLASSES = new Set([
+  'auto_issue', 'block', 'route_to_agent', 'active', 'off', 'open', 'sent'
+]);
+
+function auditPillClass(action) {
+  return AUDIT_PILL_CLASSES.has(action) ? 'pill ' + action : 'pill';
+}
+
+/** renderAudit(rows) — no handlers, read-only table. */
+function renderAudit(rows) {
+  const table = document.getElementById('auditTable');
+  if (!table) return;
+  const body = tbodyOf(table);
+  clear(body);
+
+  body.appendChild(headerRow(['When', 'Route', 'Holder', 'Codes']));
+
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    tr.appendChild(td('No activity yet.', 'muted'));
+    body.appendChild(tr);
+    return;
+  }
+
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+
+    tr.appendChild(td(r.occurred_at ? new Date(r.occurred_at).toLocaleString() : ''));
+
+    // action: text via textContent, class via allowlist only.
+    const actionCell = document.createElement('td');
+    const span = el('span', r.action ?? '');
+    span.className = auditPillClass(r.action);
+    actionCell.appendChild(span);
+    tr.appendChild(actionCell);
+
+    tr.appendChild(td(r.holder_name));
+
+    const codes = Array.isArray(r.audit_codes)
+      ? r.audit_codes.join(', ')
+      : (r.audit_codes == null ? '' : String(r.audit_codes));
+    tr.appendChild(td(codes, 'muted'));
+
+    body.appendChild(tr);
+  });
+}
+
 /* --- exports -------------------------------------------------------------- */
 window.PinnacleRender = {
   renderPolicies,
   renderQueue,
+  renderAudit,
+  auditPillClass,
   el, td, button, pill, clear
 };
