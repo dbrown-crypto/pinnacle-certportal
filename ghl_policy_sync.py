@@ -46,7 +46,9 @@ class PolicyLineSyncRequest(BaseModel):
     coverage_limit: Optional[float] = Field(default=None, gt=0)
     aggregate_limit: Optional[float] = Field(default=None, gt=0)
     deductible: Optional[float] = Field(default=None, ge=0)
-    auto_symbols: list[str] = Field(default_factory=lambda: ["SCHEDULED"])
+    auto_symbols: list[str] = Field(default_factory=list)
+    gl_coverage_form: Optional[str] = Field(default=None, max_length=30)
+    gl_aggregate_basis: Optional[str] = Field(default=None, max_length=30)
 
     @field_validator("client_email")
     @classmethod
@@ -69,7 +71,10 @@ class PolicyLineSyncRequest(BaseModel):
             raise ValueError("status must be Active, In Force, Pending, Cancelled, or Expired")
         return aliases[normalized]
 
-    @field_validator("carrier_naic", "usdot", "producer_block", mode="before")
+    @field_validator(
+        "carrier_naic", "usdot", "producer_block",
+        "gl_coverage_form", "gl_aggregate_basis", mode="before",
+    )
     @classmethod
     def blank_to_none(cls, value):
         return None if isinstance(value, str) and not value.strip() else value
@@ -83,6 +88,15 @@ class PolicyLineSyncRequest(BaseModel):
             return value.replace("$", "").replace(",", "").strip()
         return value
 
+    @field_validator("auto_symbols", mode="before")
+    @classmethod
+    def normalize_auto_symbols(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
     @model_validator(mode="after")
     def policy_line_is_complete(self):
         if self.expiration_date < self.effective_date:
@@ -93,6 +107,11 @@ class PolicyLineSyncRequest(BaseModel):
                 raise ValueError("coverage_limit is required for an active Auto, Cargo, or GL line")
             if line == "gl" and self.aggregate_limit is None:
                 raise ValueError("aggregate_limit is required for an active GL line")
+        if self.status == "active" and line == "auto" and not self.auto_symbols:
+            raise ValueError("auto_symbols is required for an active Auto line")
+        if self.status == "active" and line == "gl":
+            if not self.gl_coverage_form or not self.gl_aggregate_basis:
+                raise ValueError("gl_coverage_form and gl_aggregate_basis are required for an active GL line")
         return self
 
 
@@ -166,6 +185,16 @@ def _carrier_row(body: PolicyLineSyncRequest, line: str) -> dict:
     }
     if line == "auto":
         row["autos"] = [str(v).strip().upper() for v in body.auto_symbols if str(v).strip()]
+    if line == "gl":
+        form = re.sub(r"[^a-z]", "", body.gl_coverage_form.lower())
+        if form not in {"occurrence", "claimsmade"}:
+            raise HTTPException(422, "GL Coverage Form must be Occurrence or Claims Made.")
+        aggregate = re.sub(r"[^a-z]", "", body.gl_aggregate_basis.lower())
+        aggregate_aliases = {"policy": "POLICY", "project": "PROJECT", "location": "LOC", "loc": "LOC"}
+        if aggregate not in aggregate_aliases:
+            raise HTTPException(422, "GL Aggregate Basis must be Policy, Project, or Location.")
+        row["form"] = "CLAIMS-MADE" if form == "claimsmade" else "OCCURRENCE"
+        row["aggregate"] = aggregate_aliases[aggregate]
     if body.deductible is not None:
         row["deductible"] = body.deductible
     return row
