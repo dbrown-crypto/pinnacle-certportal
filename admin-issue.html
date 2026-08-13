@@ -1,298 +1,258 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="robots" content="noindex">
-<title>Pinnacle — Owner Certificate Issuance</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<style>
-  :root { --navy:#0e1f38; --gold:#c9a227; --text:#e8ecf3; --muted:#9fb0c8; }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { background:linear-gradient(160deg,#0b1930,#122647); min-height:100vh; color:var(--text);
-         font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; padding:32px 16px; }
-  .wrap { max-width:760px; margin:0 auto; }
-  .brand { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
-  .diamond { width:34px; height:34px; border:1.5px solid var(--gold); transform:rotate(45deg);
-             display:flex; align-items:center; justify-content:center; }
-  .diamond span { transform:rotate(-45deg); color:var(--gold); font-family:Georgia,serif; }
-  h1 { font-family:Georgia,serif; font-size:22px; font-weight:600; }
-  .sub { color:var(--gold); font-size:11px; letter-spacing:2px; text-transform:uppercase; }
-  .card { background:#fff; color:#1c2533; border-radius:10px; padding:22px; margin-bottom:16px;
-          box-shadow:0 8px 30px rgba(0,0,0,.35); }
-  .card h2 { font-size:17px; margin-bottom:12px; }
-  label { display:block; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#5b6b82;
-          margin:12px 0 4px; }
-  input[type=text],input[type=email],input[type=password], textarea, select {
-    width:100%; padding:10px 12px; border:1px solid #cfd8e3; border-radius:6px; font:inherit; background:#f8fafc; }
-  textarea { min-height:64px; resize:vertical; }
-  button { margin-top:14px; padding:11px 22px; border:0; border-radius:6px; background:var(--navy);
-           color:#fff; font:600 15px/1 inherit; cursor:pointer; }
-  button.gold { background:var(--gold); color:#1c2533; }
-  button.sm { padding:7px 14px; font-size:13px; margin-top:8px; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .msg { margin-top:14px; padding:12px 14px; border-radius:6px; font-size:14px; display:none; white-space:pre-wrap; }
-  .msg.err { background:#fdecec; color:#8c2020; display:block; }
-  .msg.ok  { background:#e9f7ee; color:#1d6b3a; display:block; }
-  .msg.info{ background:#eef3fb; color:#27436b; display:block; }
-  .note { font-size:13px; color:#5b6b82; margin-top:8px; }
-  .chk { display:flex; gap:8px; align-items:flex-start; margin:8px 0; font-size:14px; }
-  .chk input { margin-top:3px; }
-  .chk.dis { opacity:.45; }
-  .preview { background:#f4f6f9; border:1px dashed #b9c5d6; border-radius:6px; padding:12px;
-             font-size:13px; white-space:pre-wrap; margin-top:10px; display:none; }
-  .req { border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px; margin-top:8px; font-size:13px;
-         display:flex; justify-content:space-between; gap:10px; align-items:center; }
-  .foot { text-align:center; color:var(--muted); font-size:12px; margin-top:22px; }
-  .foot a { color:var(--muted); }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="brand">
-    <div class="diamond"><span>P</span></div>
-    <div><h1>Pinnacle Risk Advisors</h1><div class="sub">Owner Certificate Issuance</div></div>
-  </div>
+"""
+admin_issue.py — Owner (admin) issue-on-behalf. Phase 1 + Phase 2.
 
-  <div class="card" id="loginCard" style="display:none">
-    <h2>Owner sign in</h2>
-    <label for="email">Email</label><input id="email" type="email" autocomplete="username">
-    <label for="password">Password</label><input id="password" type="password" autocomplete="current-password">
-    <button id="loginBtn">Sign in</button>
-    <div class="msg" id="loginMsg"></div>
-  </div>
+Phase 1: POST /admin/issue-certificate — owner issues a plain informational
+ACORD 25 for any client's policy (full gate enforced).
 
-  <div class="card" id="reqCard" style="display:none">
-    <h2>Client special requests</h2>
-    <div id="reqList" class="note">Loading…</div>
-  </div>
+Phase 2 (E&O carrier cleared; wording text approved by Derrick Brown):
+  * The same endpoint now accepts special wording (additional insured, waiver
+    of subrogation, primary & non-contributory, custom language) ONLY when:
+      - the caller is on ADMIN_USER_IDS,
+      - the policy passes the same objective gate as any client issuance
+        (active, in-date, kill switch, coverage present),
+      - every requested wording is flagged on the policy's `endorsements`
+        (custom language excepted — it requires explicit custom text),
+      - the owner explicitly set confirm_wording=true after seeing the final
+        text (UI enforces the preview; server enforces the confirmation).
+  * Signature is applied ONLY when apply_signature=true (per-cert decision,
+    default off). Logged as SIGNATURE_APPLIED_BY_OWNER.
+  * The approved clause templates below are the ONLY generated wording.
+  * Audit: OWNER_ISSUED_BY_<uid> + AUTHORIZED_WORDING_<KIND> codes, and the
+    full final wording stored in the certificate's coverage_snapshot.
+  * Fulfilling a queued client special_request marks it status=sent.
+  * POST /admin/policies/{id}/endorsements — owner keys per-policy endorsement
+    flags (the enforcement source of truth).
 
-  <div class="card" id="issueCard" style="display:none">
-    <h2>Issue a certificate on behalf of a client</h2>
-    <label for="policySel">Client policy</label>
-    <select id="policySel"></select>
-    <div class="note" id="endoNote"></div>
-    <button class="sm" id="endoEditBtn" type="button">Edit endorsement flags</button>
-    <div id="endoEditor" style="display:none">
-      <label>Endorsement flags (JSON — only flag what the policy actually carries)</label>
-      <textarea id="endoJson" style="min-height:110px;font-family:monospace;font-size:12px"></textarea>
-      <button class="sm" id="endoSaveBtn" type="button">Save flags</button>
-    </div>
+Wire-up (end of main.py):  import admin_issue ; admin_issue.register(app)
+"""
 
-    <label for="holderName">Certificate holder name</label><input id="holderName" type="text">
-    <label for="holderAddr">Holder address</label><textarea id="holderAddr"></textarea>
-    <label for="holderEmail">Send certificate to (email, optional)</label><input id="holderEmail" type="email">
-    <label for="ops">Description of operations (optional)</label><textarea id="ops"></textarea>
+import base64
+import datetime as dt
+from typing import Optional
 
-    <label>Special wording (only options this policy is flagged as carrying)</label>
-    <div class="chk" id="w_ai_row"><input type="checkbox" id="w_ai"><span>Additional insured</span></div>
-    <div class="chk" id="w_wv_row"><input type="checkbox" id="w_wv"><span>Waiver of subrogation</span></div>
-    <div class="chk" id="w_pn_row"><input type="checkbox" id="w_pn"><span>Primary &amp; non-contributory</span></div>
-    <div class="chk"><input type="checkbox" id="w_cu"><span>Custom wording (prints verbatim)</span></div>
-    <div id="cuWrap" style="display:none"><textarea id="cuText" placeholder="Exact wording to print"></textarea></div>
-    <div id="lineWrap" style="display:none">
-      <label for="lineSel">Coverage line the wording refers to</label>
-      <select id="lineSel"><option>General Liability</option><option>Auto Liability</option><option>Motor Truck Cargo</option></select>
-    </div>
+from fastapi import Header, HTTPException
+from pydantic import BaseModel, Field
 
-    <div class="preview" id="preview"></div>
-    <div class="chk" id="confirmRow" style="display:none"><input type="checkbox" id="confirmChk">
-      <span><b>I authorize this wording.</b> I have read the exact text above and authorize it on this certificate.</span></div>
-    <div class="chk" id="sigRow" style="display:none"><input type="checkbox" id="sigChk">
-      <span>Apply my authorized-representative signature to this certificate</span></div>
+from gate import SpecialWording
+from acord25_2016_overlay import TextOverflowError
 
-    <button class="gold" id="issueBtn">Issue &amp; send certificate</button>
-    <button id="dlBtn" style="display:none">Download PDF</button>
-    <div class="msg" id="issueMsg"></div>
-  </div>
+# --- Approved wording templates (Derrick Brown, licensed agent) --------------
+WORDING_TEMPLATES = {
+    "additional_insured": (
+        "The certificate holder is included as an additional insured under the "
+        "{line} policy, but only with respect to operations of the named insured, "
+        "only where required by written contract, and subject to the terms, "
+        "conditions, and exclusions of the policy{form_clause}."
+    ),
+    "waiver_of_subrogation": (
+        "A waiver of subrogation applies in favor of the certificate holder under "
+        "the {line} policy, but only where required by written contract and as "
+        "permitted by{form_clause2}."
+    ),
+    "primary_non_contributory": (
+        "Coverage afforded to the certificate holder under the {line} policy is "
+        "primary and non-contributory, but only where required by written contract "
+        "and per{form_clause2}."
+    ),
+}
+FLAGGABLE = set(WORDING_TEMPLATES)  # custom (special_language) handled separately
 
-  <div class="foot">
-    Signed in as <span id="who">—</span> · <a href="#" id="signOut">Sign out</a><br>
-    Certificates are issued as a matter of information only and confer no rights upon the holder.
-  </div>
-</div>
 
-<script>
-(async function () {
-  const $ = id => document.getElementById(id);
-  const show = (el, on) => { el.style.display = on ? '' : 'none'; };
-  const msg = (el, cls, text) => { el.className = 'msg ' + cls; el.textContent = text; };
-  const KINDS = { w_ai:'additional_insured', w_wv:'waiver_of_subrogation', w_pn:'primary_non_contributory' };
-  const TPL = {
-    additional_insured: (l,f)=>'The certificate holder is included as an additional insured under the '+l+' policy, but only with respect to operations of the named insured, only where required by written contract, and subject to the terms, conditions, and exclusions of the policy'+(f?' and endorsement '+f:'')+'.',
-    waiver_of_subrogation: (l,f)=>'A waiver of subrogation applies in favor of the certificate holder under the '+l+' policy, but only where required by written contract and as permitted by'+(f?' endorsement '+f:' the applicable endorsement')+'.',
-    primary_non_contributory: (l,f)=>'Coverage afforded to the certificate holder under the '+l+' policy is primary and non-contributory, but only where required by written contract and per'+(f?' endorsement '+f:' the applicable endorsement')+'.'
-  };
+def _render_clause(kind: str, line: str, form: Optional[str]) -> str:
+    t = WORDING_TEMPLATES[kind]
+    fc = f" and endorsement {form}" if form else ""
+    fc2 = f" endorsement {form}" if form else " the applicable endorsement"
+    return t.format(line=line, form_clause=fc, form_clause2=fc2)
 
-  let CFG = {};
-  try {
-    const t = await (await fetch('admin.html', { cache: 'no-store' })).text();
-    const grab = n => (t.match(new RegExp('const\\s+' + n + '\\s*=\\s*["\'`]([^"\'`]+)')) || [])[1];
-    CFG = { url: grab('SUPABASE_URL'), key: grab('SUPABASE_ANON_KEY'), backend: grab('BACKEND_URL') };
-  } catch (e) {}
-  if (!CFG.url || !CFG.key || !CFG.backend) {
-    show($('loginCard'), true); msg($('loginMsg'), 'err', 'Could not load portal configuration.'); return;
-  }
-  const sb = supabase.createClient(CFG.url, CFG.key);
-  let token = null, pdfBytes = null, certNo = '', policies = [];
 
-  async function api(path, opts) {
-    const r = await fetch(CFG.backend + path, Object.assign({
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' } }, opts));
-    let body = null; try { body = await r.json(); } catch (e) {}
-    return { status: r.status, body };
-  }
-  const curPolicy = () => policies.find(p => p.id === $('policySel').value);
+class AdminIssueRequest(BaseModel):
+    policy_id: str
+    holder_name: str
+    holder_address: str
+    holder_email: Optional[str] = None
+    description_of_operations: str = ""
+    requested_special_wording: list[SpecialWording] = Field(default_factory=list)
+    wording_line: str = "General Liability"
+    custom_wording: Optional[str] = None
+    confirm_wording: bool = False
+    apply_signature: bool = False
+    special_request_id: Optional[str] = None
 
-  function renderWording() {
-    const p = curPolicy(); const endo = (p && p.endorsements) || {};
-    for (const [id, kind] of Object.entries(KINDS)) {
-      const has = !!endo[kind];
-      $(id).disabled = !has; if (!has) $(id).checked = false;
-      $(id + '_row').className = 'chk' + (has ? '' : ' dis');
-      $(id + '_row').title = has ? '' : 'Not flagged on this policy — edit endorsement flags if the policy carries it.';
-    }
-    $('endoNote').textContent = Object.keys(endo).length
-      ? 'Flagged endorsements: ' + Object.keys(endo).join(', ')
-      : 'No endorsement flags set on this policy — special wording is disabled until you flag what it carries.';
-    const any = Object.keys(KINDS).some(id => $(id).checked) || $('w_cu').checked;
-    show($('lineWrap'), Object.keys(KINDS).some(id => $(id).checked));
-    show($('cuWrap'), $('w_cu').checked);
-    show($('confirmRow'), any); show($('sigRow'), any);
-    if (!any) { $('confirmChk').checked = false; $('sigChk').checked = false; show($('preview'), false); return; }
-    const line = $('lineSel').value, clauses = [];
-    for (const [id, kind] of Object.entries(KINDS))
-      if ($(id).checked) clauses.push(TPL[kind](line, ((endo[kind]||{}).form)||''));
-    if ($('w_cu').checked && $('cuText').value.trim()) clauses.push($('cuText').value.trim());
-    $('preview').textContent = 'EXACT WORDING THAT WILL PRINT:\n\n' + (clauses.join('\n\n') || '(enter custom text)');
-    show($('preview'), true);
-  }
-  ['w_ai','w_wv','w_pn','w_cu','lineSel','cuText','policySel'].forEach(id =>
-    $(id).addEventListener('input', renderWording));
 
-  async function loadPolicies() {
-    const res = await api('/admin/policies');
-    const sel = $('policySel'); sel.innerHTML = '';
-    if (res.status !== 200 || !Array.isArray(res.body)) {
-      msg($('issueMsg'), 'err', res.status === 403
-        ? 'This account is not on the admin allowlist (ADMIN_USER_IDS).'
-        : 'Could not load policies (' + res.status + ').'); return;
-    }
-    policies = res.body;
-    for (const p of policies) {
-      const o = document.createElement('option'); o.value = p.id;
-      o.textContent = p.named_insured + ' - ' + p.status + ' - exp ' + p.expiration_date;
-      sel.appendChild(o);
-    }
-    renderWording();
-  }
+class EndorsementsPatch(BaseModel):
+    endorsements: dict
 
-  async function loadRequests() {
-    const res = await api('/admin/special-requests');
-    const box = $('reqList');
-    if (res.status !== 200 || !Array.isArray(res.body)) { box.textContent = 'Unavailable.'; return; }
-    const open = res.body.filter(r => (r.status || 'open') !== 'sent' && (r.status || 'open') !== 'declined');
-    if (!open.length) { box.textContent = 'No open special requests.'; return; }
-    box.innerHTML = '';
-    for (const r of open) {
-      const d = document.createElement('div'); d.className = 'req';
-      const w = (r.requested_wording || []).join(', ');
-      d.innerHTML = '<span><b>' + (r.holder_name || '?') + '</b> — ' + w + '</span>';
-      const b = document.createElement('button'); b.className = 'sm'; b.textContent = 'Fulfill';
-      b.onclick = () => {
-        $('policySel').value = r.policy_id;
-        $('holderName').value = r.holder_name || '';
-        $('holderAddr').value = r.holder_address || '';
-        $('holderEmail').value = r.holder_email || '';
-        $('ops').value = r.notes || '';
-        for (const [id, kind] of Object.entries(KINDS)) $(id).checked = (r.requested_wording || []).includes(kind);
-        $('w_cu').checked = (r.requested_wording || []).includes('special_language');
-        $('issueBtn').dataset.reqId = r.id;
-        renderWording(); window.scrollTo(0, document.body.scrollHeight);
-        msg($('issueMsg'), 'info', 'Fulfilling request for ' + (r.holder_name || '?') + ' — review, authorize, and issue.');
-      };
-      d.appendChild(b); box.appendChild(d);
-    }
-  }
 
-  async function refresh() {
-    const { data: { session } } = await sb.auth.getSession();
-    token = session ? session.access_token : null;
-    $('who').textContent = session ? (session.user.email || session.user.id) : '—';
-    show($('loginCard'), !session); show($('issueCard'), !!session); show($('reqCard'), !!session);
-    if (session) { loadPolicies(); loadRequests(); }
-  }
+def register(app):
+    import main as m  # late import: register() runs after main's module body
 
-  $('loginBtn').onclick = async () => {
-    msg($('loginMsg'), 'info', 'Signing in…');
-    const { error } = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
-    if (error) { msg($('loginMsg'), 'err', error.message); return; }
-    $('loginMsg').className = 'msg'; refresh();
-  };
-  $('signOut').onclick = async e => { e.preventDefault(); await sb.auth.signOut(); refresh(); };
-  $('endoEditBtn').onclick = () => {
-    const p = curPolicy(); if (!p) return;
-    $('endoJson').value = JSON.stringify(p.endorsements || {
-      additional_insured: { lines: ['general_liability'], form: '' } }, null, 2);
-    show($('endoEditor'), true);
-  };
-  $('endoSaveBtn').onclick = async () => {
-    let val; try { val = JSON.parse($('endoJson').value); } catch (e) { msg($('issueMsg'), 'err', 'Invalid JSON.'); return; }
-    const res = await api('/admin/policies/' + $('policySel').value + '/endorsements',
-      { method: 'POST', body: JSON.stringify({ endorsements: val }) });
-    if (res.status === 200) { msg($('issueMsg'), 'ok', 'Endorsement flags saved.'); show($('endoEditor'), false); loadPolicies(); }
-    else msg($('issueMsg'), 'err', 'Save failed (' + res.status + ').');
-  };
+    @app.post("/admin/issue-certificate")
+    async def admin_issue_certificate(
+        body: AdminIssueRequest,
+        authorization: Optional[str] = Header(None),
+    ):
+        admin_id = m.require_admin(authorization)
+        wording = list(dict.fromkeys(body.requested_special_wording))
+        unknown = [w for w in wording if w not in FLAGGABLE and w != "special_language"]
+        if unknown:
+            raise HTTPException(422, f"Unknown wording option(s): {', '.join(unknown)}")
 
-  $('issueBtn').onclick = async () => {
-    const wording = Object.entries(KINDS).filter(([id]) => $(id).checked).map(([,k]) => k);
-    if ($('w_cu').checked) wording.push('special_language');
-    if (!$('policySel').value) { msg($('issueMsg'), 'err', 'Pick a client policy.'); return; }
-    if (!$('holderName').value.trim() || !$('holderAddr').value.trim()) {
-      msg($('issueMsg'), 'err', 'Certificate holder name and address are required.'); return; }
-    if (wording.length && !$('confirmChk').checked) {
-      msg($('issueMsg'), 'err', 'Check "I authorize this wording" after reviewing the exact text.'); return; }
-    $('issueBtn').disabled = true; show($('dlBtn'), false); pdfBytes = null;
-    msg($('issueMsg'), 'info', 'Running the gate and issuing…');
-    const res = await api('/admin/issue-certificate', { method: 'POST', body: JSON.stringify({
-      policy_id: $('policySel').value,
-      holder_name: $('holderName').value.trim(),
-      holder_address: $('holderAddr').value.trim(),
-      holder_email: $('holderEmail').value.trim() || null,
-      description_of_operations: $('ops').value.trim(),
-      requested_special_wording: wording,
-      wording_line: $('lineSel').value,
-      custom_wording: $('w_cu').checked ? $('cuText').value.trim() : null,
-      confirm_wording: $('confirmChk').checked,
-      apply_signature: $('sigChk').checked,
-      special_request_id: $('issueBtn').dataset.reqId || null
-    })});
-    $('issueBtn').disabled = false;
-    if (res.status === 200 && res.body && res.body.status === 'issued') {
-      certNo = res.body.cert_number;
-      pdfBytes = Uint8Array.from(atob(res.body.pdf_base64), c => c.charCodeAt(0));
-      const bits = ['Issued ' + certNo + '.'];
-      if (res.body.wording_applied && res.body.wording_applied.length) bits.push('Special wording applied and logged.');
-      bits.push(res.body.signature_applied ? 'Signature applied (logged).' : 'Unsigned.');
-      bits.push(res.body.email_status === 'sent' ? 'Emailed to ' + res.body.emailed_to.join(', ') + '.' :
-                (res.body.email_status === 'not_sent' ? 'No email requested.' : 'Email failed — download and send manually.'));
-      msg($('issueMsg'), 'ok', bits.join(' '));
-      delete $('issueBtn').dataset.reqId; show($('dlBtn'), true); loadRequests();
-    } else {
-      const d = (res.body && res.body.detail) || {};
-      msg($('issueMsg'), 'err', typeof d === 'string' ? d :
-        (d.message || 'Backend error (' + res.status + '). Nothing was issued.'));
-    }
-  };
-  $('dlBtn').onclick = () => {
-    if (!pdfBytes) return;
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'COI_' + certNo + '.pdf'; a.click(); URL.revokeObjectURL(a.href);
-  };
-  sb.auth.onAuthStateChange(() => refresh());
-  refresh();
-})();
-</script>
-</body>
-</html>
+        policy = await m.load_policy(body.policy_id)
+
+        # --- Phase 2 enforcement: wording must be flagged on the policy ------
+        clauses: list[str] = []
+        if wording:
+            if not body.confirm_wording:
+                raise HTTPException(
+                    400, "Special wording requires explicit owner confirmation "
+                         "(confirm_wording) after reviewing the final text.")
+            endo = policy.get("endorsements") or {}
+            missing = [w for w in wording if w in FLAGGABLE and w not in endo]
+            if missing:
+                raise HTTPException(409, detail={
+                    "status": "refused",
+                    "message": "Policy is not flagged as carrying: "
+                               + ", ".join(missing)
+                               + ". Set the policy's endorsement flags first "
+                                 "(or the policy does not carry this endorsement).",
+                })
+            for w in wording:
+                if w in FLAGGABLE:
+                    clauses.append(_render_clause(
+                        w, body.wording_line, (endo.get(w) or {}).get("form")))
+            if "special_language" in wording:
+                if not (body.custom_wording or "").strip():
+                    raise HTTPException(400, "Custom wording selected but no text provided.")
+                clauses.append(body.custom_wording.strip())
+
+        req = m.CertRequest(
+            holder_name=body.holder_name,
+            holder_address=body.holder_address,
+            holder_email=body.holder_email,
+            description_of_operations=body.description_of_operations,
+            requested_special_wording=[],
+        )
+        # Objective gate — identical checks to client issuance; never overridden.
+        result = m.evaluate_gate(m._to_snapshot(policy), req)
+
+        result.audit_codes.append(f"OWNER_ISSUED_BY_{admin_id}")
+        for w in wording:
+            result.audit_codes.append("AUTHORIZED_WORDING_" + w.upper())
+        if wording and body.apply_signature:
+            result.audit_codes.append("SIGNATURE_APPLIED_BY_OWNER")
+        await m.write_audit(policy["client_id"], policy["id"], result, body.holder_name)
+
+        if result.route != "auto_issue":
+            raise HTTPException(409, detail={
+                "status": result.route, "message": result.reasons[0],
+                "owner_note": "Owner issuance does not override policy status, "
+                              "dates, or the kill switch.",
+            })
+
+        final_ops = body.description_of_operations.strip()
+        if clauses:
+            final_ops = (final_ops + "\n\n" if final_ops else "") + "\n\n".join(clauses)
+
+        cert_number = m._next_cert_number()
+        content = m.CertContent(
+            cert_number=cert_number,
+            issue_date=dt.date.today(),
+            producer_block=policy["producer_block"],
+            insured_name=policy["named_insured"],
+            insured_address=policy["insured_address"],
+            holder_name=req.holder_name,
+            holder_address=req.holder_address,
+            description_of_operations=final_ops,
+            coverages=policy.get("carriers") or [],
+            data_current_as_of=dt.date.fromisoformat(policy["data_current_as_of"]),
+            usdot=policy.get("usdot") or "",
+            mc_number=policy.get("mc_number") or "",
+            vehicles=policy.get("vehicles") or [],
+            drivers=policy.get("drivers") or [],
+            trailers=policy.get("trailers") or [],
+        )
+        # Signature: standard certs keep existing behavior; special-wording
+        # certs apply it only on the owner's per-cert choice.
+        sig_path = m.SIGNATURE_PATH if (not wording or body.apply_signature) else None
+        try:
+            pdf = m.generate_certificate(
+                content,
+                template_path=m.TEMPLATE_PATH,
+                field_map=m._build_field_map(policy, req, cert_number) if m.TEMPLATE_PATH else None,
+                signature_png_path=sig_path,
+            )
+        except TextOverflowError as exc:
+            # The wording will not fit the ACORD 25 and there is no ACORD 101 to
+            # carry it. Refuse rather than issue a cert with wording missing --
+            # the whole point of the guard is that this cannot ship silently.
+            raise HTTPException(409, detail={
+                "status": "refused",
+                "message": "The description wording does not fit the certificate "
+                           "and no ACORD 101 continuation page is configured. "
+                           "Shorten the wording, or set ACORD101_TEMPLATE_PATH "
+                           "so the remainder can be carried.",
+                "detail": str(exc),
+            })
+
+        pdf_path = None
+        if m.SUPABASE_URL and m.SERVICE_KEY:
+            pdf_path = await m.storage_upload(f"{policy['client_id']}/{cert_number}.pdf", pdf)
+
+        await m.sb_insert("issued_certificates", {
+            "cert_number": cert_number, "policy_id": policy["id"],
+            "client_id": policy["client_id"],
+            "holder_name": req.holder_name, "holder_address": req.holder_address,
+            "holder_email": req.holder_email, "description_of_ops": final_ops,
+            "coverage_snapshot": {
+                "coverages": policy.get("coverages"),
+                "carriers": policy.get("carriers"),
+                "data_current_as_of": policy["data_current_as_of"],
+                "owner_issued_by": admin_id,
+                "authorized_wording": clauses,
+                "wording_kinds": wording,
+                "signature_authorized": bool(wording and body.apply_signature),
+            },
+            "pdf_path": pdf_path,
+        })
+
+        if body.special_request_id:
+            try:
+                await m.sb_patch("special_requests", {"id": body.special_request_id},
+                                 {"status": "sent"})
+            except Exception:
+                pass  # cert is issued; request-status is bookkeeping
+
+        recipients = [r for r in [req.holder_email] if r]
+        email_status = "not_sent"
+        if recipients and m.RESEND_KEY:
+            try:
+                await m.send_certificate_email(recipients, cert_number,
+                                               policy["named_insured"], pdf)
+                email_status = "sent"
+            except Exception as e:
+                email_status = f"failed: {type(e).__name__}"
+
+        return {
+            "status": "issued", "cert_number": cert_number,
+            "pdf_base64": base64.b64encode(pdf).decode(),
+            "emailed_to": recipients if email_status == "sent" else [],
+            "email_status": email_status,
+            "issued_for_client_id": policy["client_id"],
+            "issued_by_owner": True,
+            "wording_applied": clauses,
+            "signature_applied": bool(wording and body.apply_signature),
+        }
+
+    @app.post("/admin/policies/{policy_id}/endorsements")
+    async def admin_set_endorsements(
+        policy_id: str, body: EndorsementsPatch,
+        authorization: Optional[str] = Header(None),
+    ):
+        m.require_admin(authorization)
+        rows = await m.sb_patch("policies", {"id": policy_id},
+                                {"endorsements": body.endorsements})
+        if not rows:
+            raise HTTPException(404, "Policy not found.")
+        return rows[0]
+
+    return admin_issue_certificate
