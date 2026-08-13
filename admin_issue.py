@@ -34,6 +34,7 @@ from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
 from gate import SpecialWording
+from acord25_2016_overlay import TextOverflowError
 
 # --- Approved wording templates (Derrick Brown, licensed agent) --------------
 WORDING_TEMPLATES = {
@@ -173,12 +174,25 @@ def register(app):
         # Signature: standard certs keep existing behavior; special-wording
         # certs apply it only on the owner's per-cert choice.
         sig_path = m.SIGNATURE_PATH if (not wording or body.apply_signature) else None
-        pdf = m.generate_certificate(
-            content,
-            template_path=m.TEMPLATE_PATH,
-            field_map=m._build_field_map(policy, req, cert_number) if m.TEMPLATE_PATH else None,
-            signature_png_path=sig_path,
-        )
+        try:
+            pdf = m.generate_certificate(
+                content,
+                template_path=m.TEMPLATE_PATH,
+                field_map=m._build_field_map(policy, req, cert_number) if m.TEMPLATE_PATH else None,
+                signature_png_path=sig_path,
+            )
+        except TextOverflowError as exc:
+            # The wording will not fit the ACORD 25 and there is no ACORD 101 to
+            # carry it. Refuse rather than issue a cert with wording missing --
+            # the whole point of the guard is that this cannot ship silently.
+            raise HTTPException(409, detail={
+                "status": "refused",
+                "message": "The description wording does not fit the certificate "
+                           "and no ACORD 101 continuation page is configured. "
+                           "Shorten the wording, or set ACORD101_TEMPLATE_PATH "
+                           "so the remainder can be carried.",
+                "detail": str(exc),
+            })
 
         pdf_path = None
         if m.SUPABASE_URL and m.SERVICE_KEY:
