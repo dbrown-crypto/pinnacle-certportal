@@ -41,6 +41,7 @@ from gate import (
     evaluate_gate, PolicySnapshot, CertRequest, PolicyStatus, SpecialWording, GateResult,
 )
 from cert_generator import generate_certificate, CertContent
+from acord25_2016_overlay import CarrierIdentityError, _naic_for
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -281,12 +282,21 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
         drivers=policy.get("drivers") or [],
         trailers=policy.get("trailers") or [],
     )
-    pdf = generate_certificate(
-        content,
-        template_path=TEMPLATE_PATH,
-        field_map=_build_field_map(policy, req, cert_number) if TEMPLATE_PATH else None,
-        signature_png_path=SIGNATURE_PATH,
-    )
+    try:
+        pdf = generate_certificate(
+            content,
+            template_path=TEMPLATE_PATH,
+            field_map=_build_field_map(policy, req, cert_number) if TEMPLATE_PATH else None,
+            signature_png_path=SIGNATURE_PATH,
+        )
+    except CarrierIdentityError as exc:
+        raise HTTPException(409, detail={
+            "status": "refused",
+            "message": "The policy uses a carrier brand instead of the exact "
+                       "underwriting company. Update it from the declarations page "
+                       "before issuing a certificate.",
+            "detail": str(exc),
+        })
 
     pdf_path = None
     if SUPABASE_URL and SERVICE_KEY:
@@ -403,6 +413,22 @@ async def admin_list_policies(authorization: Optional[str] = Header(None)):
 async def admin_upsert_policy(body: PolicyUpsert, authorization: Optional[str] = Header(None)):
     require_admin(authorization)
     row = body.model_dump(exclude_none=True)
+    corrected_carriers = []
+    for carrier in row.get("carriers", []):
+        corrected = dict(carrier)
+        try:
+            corrected["naic"] = _naic_for(
+                corrected.get("carrier"), corrected.get("naic")
+            )
+        except CarrierIdentityError as exc:
+            raise HTTPException(422, detail={
+                "status": "refused",
+                "message": "Use the exact underwriting company from the "
+                           "declarations page, not a carrier brand.",
+                "detail": str(exc),
+            })
+        corrected_carriers.append(corrected)
+    row["carriers"] = corrected_carriers
     if body.id:
         return (await sb_patch("policies", {"id": body.id}, row))[0]
     row.pop("id", None)

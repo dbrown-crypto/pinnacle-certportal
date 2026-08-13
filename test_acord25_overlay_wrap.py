@@ -12,10 +12,12 @@ import fitz
 
 from acord25_2016_overlay import (
     BOX_DESC,
+    CarrierIdentityError,
     TextOverflowError,
     _assert_fits,
     _draw_description,
     _fit_size,
+    _naic_for,
     _text_width,
     _wrap_block,
     generate_trucking_cert,
@@ -73,6 +75,23 @@ def spans(page):
 
 
 class Acord25WrapTests(unittest.TestCase):
+    def test_verified_commercial_auto_entities_override_stale_naic(self):
+        self.assertEqual(_naic_for("Progressive Casualty Insurance Co.", "99999"), "24260")
+        self.assertEqual(_naic_for("GEICO Marine Insurance Company", "99999"), "37923")
+
+    def test_legacy_company_abbreviation_normalizes(self):
+        self.assertEqual(_naic_for("Progressive Mountain Insurance Co", None), "35190")
+        self.assertEqual(_naic_for("Canal Insurance Co.", None), "10464")
+
+    def test_brand_only_carrier_is_refused_instead_of_guessed(self):
+        for brand in ("GEICO Commercial", "Progressive Commercial"):
+            with self.subTest(brand=brand):
+                with self.assertRaisesRegex(CarrierIdentityError, "declarations page"):
+                    _naic_for(brand, "37923")
+
+    def test_unknown_exact_entity_keeps_provided_naic(self):
+        self.assertEqual(_naic_for("Example Specialty Insurance Company", "12345"), "12345")
+
     def test_measured_broken_wording_wraps_to_two_lines(self):
         self.assertAlmostEqual(_text_width(BROKEN_WORDING, 7.0), 928.7, delta=0.1)
         lines = _wrap_block(BROKEN_WORDING, 7.0, 564.0)
