@@ -78,6 +78,23 @@ Environment variables:
 | `MAIL_FROM` | `Pinnacle Risk Advisors <certs@pinnacleriskad.com>` |
 | `AGENT_NOTIFY_EMAIL` | `dbrown@pinnacleriskad.com` |
 | `ADMIN_USER_IDS` | Your Supabase user UUID(s), comma-separated |
+| `GHL_POLICY_SYNC_SECRET` | Long random bearer secret shared only with the GoHighLevel policy workflow |
+
+## GoHighLevel policy sync
+
+`POST /api/integrations/ghl/policies` accepts a policy snapshot from a GHL
+custom-object workflow. It authenticates with
+`Authorization: Bearer $GHL_POLICY_SYNC_SECRET`, finds exactly one existing
+portal customer by `client_email`, and idempotently creates or updates the
+policy using the GHL policy record ID. It never creates a customer and never
+issues a certificate.
+
+The workflow JSON must send the GHL policy record ID, the associated portal
+customer email, named insured, dates, producer block, insured address, coverage
+and exact underwriting-company information. `self_serve_enabled` should be
+explicit. Any non-active status automatically forces it off. Driver payloads
+accept only first name, last name, and license state; DOB and license number are
+rejected.
 | `ACORD25_TEMPLATE_PATH` | Path to your licensed ACORD 25 PDF (omit → branded sample) |
 | `SIGNATURE_PNG_PATH` | Your authorized-rep signature image (transparent PNG) |
 | `ALLOWED_ORIGINS` | Your Netlify URL(s) for CORS |
