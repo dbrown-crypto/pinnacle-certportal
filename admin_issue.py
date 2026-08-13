@@ -34,7 +34,7 @@ from fastapi import Header, HTTPException
 from pydantic import BaseModel, Field
 
 from gate import SpecialWording
-from acord25_2016_overlay import TextOverflowError
+from acord25_2016_overlay import CarrierIdentityError, TextOverflowError
 
 # --- Approved wording templates (Derrick Brown, licensed agent) --------------
 WORDING_TEMPLATES = {
@@ -181,6 +181,14 @@ def register(app):
                 field_map=m._build_field_map(policy, req, cert_number) if m.TEMPLATE_PATH else None,
                 signature_png_path=sig_path,
             )
+        except CarrierIdentityError as exc:
+            raise HTTPException(409, detail={
+                "status": "refused",
+                "message": "The policy uses a carrier brand instead of the exact "
+                           "underwriting company. Update it from the declarations "
+                           "page before issuing a certificate.",
+                "detail": str(exc),
+            })
         except TextOverflowError as exc:
             # The wording will not fit the ACORD 25 and there is no ACORD 101 to
             # carry it. Refuse rather than issue a cert with wording missing --
