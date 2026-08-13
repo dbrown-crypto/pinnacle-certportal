@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import datetime as dt
 import hmac
+import json
 import os
 import re
 import uuid
 from typing import Optional
 
+import httpx
 from fastapi import Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -21,13 +23,13 @@ from acord25_2016_overlay import CarrierIdentityError, _naic_for
 
 
 GHL_POLICY_NAMESPACE = uuid.UUID("91ae37d2-1ca5-4a58-bd2f-a213f65e9643")
+GHL_API_BASE = "https://services.leadconnectorhq.com"
 
 
 class PolicyLineSyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ghl_policy_id: str = Field(min_length=1, max_length=200)
-    client_email: str = Field(min_length=3, max_length=320)
     portal_policy_id: Optional[uuid.UUID] = None
     named_insured: str = Field(min_length=1, max_length=300)
     insured_address: str = Field(min_length=1, max_length=1000)
@@ -49,14 +51,6 @@ class PolicyLineSyncRequest(BaseModel):
     auto_symbols: list[str] = Field(default_factory=list)
     gl_coverage_form: Optional[str] = Field(default=None, max_length=30)
     gl_aggregate_basis: Optional[str] = Field(default=None, max_length=30)
-
-    @field_validator("client_email")
-    @classmethod
-    def normalize_email(cls, value: str) -> str:
-        email = value.strip().lower()
-        if email.count("@") != 1 or email.startswith("@") or email.endswith("@"):
-            raise ValueError("client_email must be a valid email address")
-        return email
 
     @field_validator("status")
     @classmethod
@@ -92,12 +86,35 @@ class PolicyLineSyncRequest(BaseModel):
             return value.replace("$", "").replace(",", "").strip()
         return value
 
+    @field_validator("self_serve_enabled", mode="before")
+    @classmethod
+    def normalize_checkbox(cls, value):
+        if isinstance(value, list):
+            value = value[0] if len(value) == 1 else value
+        if value is None or value is False:
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if not normalized:
+                return False
+            if normalized in {"true", "1", "yes", "on", "enabled"}:
+                return True
+            if normalized in {"false", "0", "no", "off", "disabled"}:
+                return False
+        return value
+
     @field_validator("auto_symbols", mode="before")
     @classmethod
     def normalize_auto_symbols(cls, value):
         if value is None or value == "":
             return []
         if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+                if isinstance(decoded, list):
+                    return decoded
+            except json.JSONDecodeError:
+                pass
             return [part.strip() for part in value.split(",") if part.strip()]
         return value
 
@@ -127,6 +144,71 @@ def _verify_secret(authorization: Optional[str]) -> None:
         raise HTTPException(401, "Missing policy sync bearer token.")
     if not hmac.compare_digest(authorization.split(" ", 1)[1], expected):
         raise HTTPException(401, "Invalid policy sync bearer token.")
+
+
+def _ghl_headers() -> dict[str, str]:
+    token = os.environ.get("GHL_PRIVATE_INTEGRATION_TOKEN", "").strip()
+    if len(token) < 20:
+        raise HTTPException(503, "GoHighLevel association lookup is not configured.")
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Version": "2021-07-28",
+    }
+
+
+def _contact_ids_from_relations(payload: object, policy_id: str) -> set[str]:
+    if isinstance(payload, list):
+        relations = payload
+    elif isinstance(payload, dict):
+        relations = payload.get("relations") or payload.get("data") or []
+    else:
+        relations = []
+
+    contact_ids: set[str] = set()
+    for relation in relations:
+        if not isinstance(relation, dict):
+            continue
+        first_key = str(relation.get("firstObjectKey", "")).lower()
+        second_key = str(relation.get("secondObjectKey", "")).lower()
+        first_id = str(relation.get("firstRecordId", "")).strip()
+        second_id = str(relation.get("secondRecordId", "")).strip()
+        if first_id == policy_id and second_key in {"contact", "contacts"} and second_id:
+            contact_ids.add(second_id)
+        if second_id == policy_id and first_key in {"contact", "contacts"} and first_id:
+            contact_ids.add(first_id)
+    return contact_ids
+
+
+async def _resolve_associated_contact_email(policy_id: str) -> str:
+    headers = _ghl_headers()
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            relation_response = await client.get(
+                f"{GHL_API_BASE}/associations/relations/{policy_id}", headers=headers,
+            )
+            relation_response.raise_for_status()
+            contact_ids = _contact_ids_from_relations(relation_response.json(), policy_id)
+            if len(contact_ids) != 1:
+                raise HTTPException(
+                    409,
+                    "Exactly one Contact must be associated with this GoHighLevel Policy before syncing.",
+                )
+            contact_response = await client.get(
+                f"{GHL_API_BASE}/contacts/{next(iter(contact_ids))}", headers=headers,
+            )
+            contact_response.raise_for_status()
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(502, "GoHighLevel association lookup failed; no portal data was changed.") from exc
+
+    payload = contact_response.json()
+    contact = payload.get("contact", payload) if isinstance(payload, dict) else {}
+    email = str(contact.get("email", "")).strip().lower()
+    if email.count("@") != 1 or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(409, "The associated GoHighLevel Contact needs a valid email before syncing.")
+    return email
 
 
 def _line_key(value: str) -> str:
@@ -242,11 +324,12 @@ def register(app):
     ):
         _verify_secret(authorization)
 
+        client_email = await _resolve_associated_contact_email(body.ghl_policy_id.strip())
         clients = await m.sb_get("clients", {
-            "email": f"eq.{body.client_email}", "select": "id,email", "limit": "2",
+            "email": f"eq.{client_email}", "select": "id,email", "limit": "2",
         })
         if len(clients) != 1:
-            raise HTTPException(409, "Exactly one portal customer must match client_email before syncing a policy.")
+            raise HTTPException(409, "Exactly one portal customer must match the associated Contact email before syncing.")
         client_id = clients[0]["id"]
 
         if body.portal_policy_id:
