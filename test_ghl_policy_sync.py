@@ -124,21 +124,28 @@ assert r.status_code == 200, r.text
 assert len(policy_rows[0]["carriers"]) == 3
 assert policy_rows[0]["coverages"]["auto_liability"] == 750000
 
-# Cancelling Cargo removes only Cargo; Auto stays active and self-serve.
+# Lapsed/Cancelled/Non-Renewed are inactive line states. Removing Cargo leaves
+# Auto active and self-service enabled.
 reset()
-r = client.post("/api/integrations/ghl/policies", json={**cargo, "status": "Cancelled", "coverage_limit": ""}, headers=AUTH)
+r = client.post("/api/integrations/ghl/policies", json={**cargo, "status": "Lapsed", "coverage_limit": ""}, headers=AUTH)
 assert r.status_code == 200, r.text
 assert r.json()["active_lines"] == 2
 assert policy_rows[0]["status"] == "active"
 assert policy_rows[0]["self_serve_enabled"] is True
 
-# Cancelling Auto removes the required line and always closes self-service.
+# Non-renewing Auto removes the required line and always closes self-service.
 reset()
-r = client.post("/api/integrations/ghl/policies", json=payload(status="Canceled", coverage_limit=""), headers=AUTH)
+r = client.post("/api/integrations/ghl/policies", json=payload(status="Non-Renewed", coverage_limit=""), headers=AUTH)
 assert r.status_code == 200, r.text
-assert policy_rows[0]["status"] == "cancelled"
+assert policy_rows[0]["status"] == "expired"
 assert policy_rows[0]["self_serve_enabled"] is False
 assert "auto_liability" not in policy_rows[0]["coverages"]
+
+# GHL's Cancelled spelling remains supported and maps to portal cancelled.
+reset()
+r = client.post("/api/integrations/ghl/policies", json=payload(status="Cancelled", coverage_limit=""), headers=AUTH)
+assert r.status_code == 200, r.text
+assert policy_rows[0]["status"] == "cancelled"
 
 # Strict payload rejects sensitive or unknown fields before any database work.
 reset()
