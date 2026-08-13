@@ -21,7 +21,6 @@ policy_rows = []
 def payload(**changes):
     body = {
         "ghl_policy_id": "ghl-auto-123",
-        "client_email": " Client@Example.com ",
         "named_insured": "Example Trucking LLC",
         "insured_address": "1 Main St, Atlanta, GA 30303",
         "usdot": "1234567",
@@ -62,6 +61,14 @@ main.sb_get = fake_get
 main.sb_upsert = fake_upsert
 
 
+async def fake_resolve_contact_email(policy_id):
+    assert policy_id.startswith("ghl-")
+    return "client@example.com"
+
+
+main.ghl_policy_sync._resolve_associated_contact_email = fake_resolve_contact_email
+
+
 def reset():
     calls["get"].clear()
     calls["upsert"].clear()
@@ -89,6 +96,17 @@ assert row["carriers"][0]["naic"] == "35190"
 assert row["carriers"][0]["autos"] == ["SCHEDULED", "HIRED", "NON-OWNED"]
 assert row["self_serve_enabled"] is True
 assert calls["get"][0][1]["email"] == "eq.client@example.com"
+
+# Common GHL checkbox renderings normalize without weakening strict fields.
+reset()
+r = client.post(
+    "/api/integrations/ghl/policies",
+    json=payload(self_serve_enabled=["true"], auto_symbols='["ANY", "HIRED"]'),
+    headers=AUTH,
+)
+assert r.status_code == 200, r.text
+assert policy_rows[0]["self_serve_enabled"] is True
+assert policy_rows[0]["carriers"][0]["autos"] == ["ANY", "HIRED"]
 
 # A separate Cargo object merges into the same portal policy.
 reset()
@@ -153,6 +171,10 @@ r = client.post("/api/integrations/ghl/policies", json=payload(driver_license="S
 assert r.status_code == 422 and not calls["get"] and not calls["upsert"]
 
 reset()
+r = client.post("/api/integrations/ghl/policies", json=payload(client_email="spoof@example.com"), headers=AUTH)
+assert r.status_code == 422 and not calls["get"] and not calls["upsert"]
+
+reset()
 missing_freshness = payload()
 missing_freshness.pop("data_current_as_of")
 r = client.post("/api/integrations/ghl/policies", json=missing_freshness, headers=AUTH)
@@ -169,6 +191,16 @@ reset()
 client_rows.clear()
 r = client.post("/api/integrations/ghl/policies", json=payload(), headers=AUTH)
 assert r.status_code == 409 and not calls["upsert"]
+
+# Relation parsing supports either direction and ignores unrelated objects.
+extract = main.ghl_policy_sync._contact_ids_from_relations
+relations = {"relations": [
+    {"firstObjectKey": "custom_objects.policy", "firstRecordId": "p1", "secondObjectKey": "contact", "secondRecordId": "c1"},
+    {"firstObjectKey": "contacts", "firstRecordId": "c2", "secondObjectKey": "custom_objects.policy", "secondRecordId": "p2"},
+    {"firstObjectKey": "custom_objects.policy", "firstRecordId": "p1", "secondObjectKey": "business", "secondRecordId": "b1"},
+]}
+assert extract(relations, "p1") == {"c1"}
+assert extract(relations, "p2") == {"c2"}
 
 client_rows.append({"id": CLIENT_ID, "email": "client@example.com"})
 policy_rows[:] = [
