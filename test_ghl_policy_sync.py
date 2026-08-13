@@ -108,6 +108,33 @@ assert r.status_code == 200, r.text
 assert policy_rows[0]["self_serve_enabled"] is True
 assert policy_rows[0]["carriers"][0]["autos"] == ["ANY", "HIRED"]
 
+# GHL can emit a selected checkbox's label and currency/multi-select text.
+reset()
+r = client.post(
+    "/api/integrations/ghl/policies",
+    json=payload(
+        self_serve_enabled="Enabled",
+        coverage_limit=" $1,000,000.00 ",
+        aggregate_limit="",
+        deductible="",
+        auto_symbols=" scheduled, HIRED, scheduled, NON-OWNED, INVALID ",
+    ),
+    headers=AUTH,
+)
+assert r.status_code == 200, r.text
+assert policy_rows[0]["self_serve_enabled"] is True
+assert policy_rows[0]["coverages"]["auto_liability"] == 1000000
+assert policy_rows[0]["carriers"][0]["autos"] == ["SCHEDULED", "HIRED", "NON-OWNED"]
+
+# Empty/unparseable optional money stays absent; required active limits still fail.
+reset()
+r = client.post(
+    "/api/integrations/ghl/policies",
+    json=payload(coverage_limit="not entered", self_serve_enabled=""),
+    headers=AUTH,
+)
+assert r.status_code == 422 and not calls["get"] and not calls["upsert"]
+
 # A separate Cargo object merges into the same portal policy.
 reset()
 cargo = payload(
