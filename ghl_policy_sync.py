@@ -53,7 +53,8 @@ class PolicySyncRequest(StrictModel):
     vehicles: list[dict] = Field(default_factory=list)
     trailers: list[dict] = Field(default_factory=list)
     drivers: list[DriverSync] = Field(default_factory=list)
-    data_current_as_of: dt.date = Field(default_factory=dt.date.today)
+    # Required because the issuance gate uses this date to reject stale data.
+    data_current_as_of: dt.date
 
     @field_validator("client_email")
     @classmethod
@@ -72,7 +73,7 @@ class PolicySyncRequest(StrictModel):
 
 def _verify_secret(authorization: Optional[str]) -> None:
     expected = os.environ.get("GHL_POLICY_SYNC_SECRET", "")
-    if not expected:
+    if len(expected) < 32:
         raise HTTPException(503, "Policy sync is not configured.")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Missing policy sync bearer token.")
@@ -160,4 +161,3 @@ def register(app):
             "policy_id": synced.get("id", policy_id),
             "self_serve_enabled": row["self_serve_enabled"],
         }
-
