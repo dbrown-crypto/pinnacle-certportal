@@ -85,19 +85,19 @@ Environment variables:
 
 ## GoHighLevel policy sync
 
-`POST /api/integrations/ghl/policies` accepts a policy snapshot from a GHL
+`POST /api/integrations/ghl/policies` accepts one policy line from a GHL
 custom-object workflow. It authenticates with
 `Authorization: Bearer $GHL_POLICY_SYNC_SECRET`, finds exactly one existing
-portal customer by `client_email`, and idempotently creates or updates the
-policy using the GHL policy record ID. It never creates a customer and never
-issues a certificate.
+portal customer by `client_email`, and merges that customer's separate Auto,
+Cargo and GL records into one portal policy snapshot. Repeated events update
+the same line; an activated renewal replaces the prior line; a cancelled line
+is removed. The Auto line controls overall policy status and self-service.
 
-The workflow JSON must send the GHL policy record ID, the associated portal
-customer email, named insured, dates, producer block, insured address, coverage
-and exact underwriting-company information. `self_serve_enabled` should be
-explicit. Any non-active status automatically forces it off. Driver payloads
-accept only first name, last name, and license state; DOB and license number are
-rejected.
+The payload includes the GHL record ID, customer email, insured identity,
+status/dates, line of business, exact underwriting company and NAIC, policy
+number, coverage limit, optional aggregate/deductible and an explicit
+data-current date. Unknown fields—including DOB and driver-license data—are
+rejected. The integration never creates customers or issues certificates.
 
 ### 3. Frontend (Netlify)
 Edit the CONFIG block at the top of **both** `index.html` and `admin.html`:
