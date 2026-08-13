@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 from typing import Optional
 
 import fitz  # PyMuPDF
@@ -33,6 +34,10 @@ class TextOverflowError(ValueError):
     invisible in the rendered PDF: the cert looks fine and the wording is
     simply gone. Callers should route to manual issuance rather than ship.
     """
+
+
+class CarrierIdentityError(ValueError):
+    """A brand name was supplied where the issuing legal entity is required."""
 
 
 # Free-form text boxes, measured off the 2016/03 template. x_right is the
@@ -55,16 +60,27 @@ NAME_BLOCK_LADDER = ((SIZE_BLOCK, SIZE), (7.5, 6.5), (7.0, 6.5), (6.5, 6.0), (6.
 # Producer e-mail printed when the producer block omits one (shared COI inbox).
 PRODUCER_EMAIL_FALLBACK = "certs@pinnacleriskad.com"
 
-# Authoritative NAIC for Pinnacle's appointed carriers, keyed by normalized
-# carrier name. Corrects wrong/missing seed data on OUTPUT so a cert never ships
-# a bad NAIC for a core carrier. NAIC must match the issuing entity on the dec
-# page; Progressive writes GA commercial auto under several entities, so only
-# exact-named entities are mapped here (extend as appointments are added).
+# Authoritative NAIC for verified issuing entities, keyed by normalized legal
+# company name. These values correct wrong/missing seed data on OUTPUT. Brand
+# names are intentionally excluded because Progressive and GEICO use multiple
+# underwriting companies; the declarations page controls.
 CARRIER_NAIC = {
     "progressive mountain": "35190",
     "progressive mountain insurance company": "35190",
+    "progressive casualty insurance company": "24260",
+    "geico marine insurance company": "37923",
+    "government employees insurance company": "22063",
     "canal insurance": "10464",
     "canal insurance company": "10464",
+}
+
+AMBIGUOUS_CARRIER_NAMES = {
+    "geico",
+    "geico commercial",
+    "geico insurance",
+    "progressive",
+    "progressive commercial",
+    "progressive insurance",
 }
 
 # AUTHORIZED REPRESENTATIVE signature. If no signature image is passed explicitly,
@@ -203,10 +219,23 @@ def _resolve_signature(signature_png_path):
 
 
 
+def _normalize_carrier_name(carrier_name):
+    """Normalize punctuation and the common Co./Company abbreviation."""
+    words = re.sub(r"[^a-z0-9]+", " ", str(carrier_name or "").lower()).split()
+    return " ".join("company" if word == "co" else word for word in words)
+
+
 def _naic_for(carrier_name, provided):
-    """Authoritative NAIC for a known appointed carrier (corrects wrong/missing
-    seed data), else the value provided in the policy data."""
-    return CARRIER_NAIC.get(str(carrier_name or "").strip().lower(), provided)
+    """Return the verified entity NAIC, or the supplied code for an unknown
+    exact entity. Refuse brand-only names because they do not identify one
+    underwriting company and therefore cannot be assigned a safe NAIC."""
+    normalized = _normalize_carrier_name(carrier_name)
+    if normalized in AMBIGUOUS_CARRIER_NAMES:
+        raise CarrierIdentityError(
+            f"{carrier_name!r} is a brand name, not an underwriting company; "
+            "enter the exact insurer shown on the declarations page"
+        )
+    return CARRIER_NAIC.get(normalized, provided)
 
 
 def _expand_year(d):
