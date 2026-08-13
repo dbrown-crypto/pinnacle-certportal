@@ -125,6 +125,9 @@ def render_fallback_certificate(
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)  # US Letter
     M = 48
+    from acord25_2016_overlay import (
+        TextOverflowError, _fit_size, _wrap_block,
+    )
 
     def text(x, y, s, size=9, color=INK, font="helv", bold=False):
         page.insert_text((x, y), s, fontsize=size,
@@ -149,14 +152,16 @@ def render_fallback_certificate(
         page.draw_rect(fitz.Rect(x, nonlocal_y, x + w, nonlocal_y + height),
                        color=GOLD_DARK, width=0.6, fill=CREAM)
         text(x + 8, nonlocal_y + 16, label, size=7.5, color=GOLD_DARK, bold=True)
-        ty = nonlocal_y + 30
-        from acord25_2016_overlay import _wrap_block as _wb
-        for _para in body.split("\n"):
-            for line in _wb(_para, 8.5, w - 16):
-                if not line:
-                    continue
-                text(x + 8, ty, line, size=8.5, color=INK)
-                ty += 12
+        body_size = _fit_size([body], w - 16, 5, size=8.5,
+                              min_size=6.0, step=0.5)
+        lines = _wrap_block(body, body_size, w - 16) if body else []
+        if len(lines) > 5:
+            raise TextOverflowError(
+                f"{label.lower()}: {len(lines)} lines will not fit 5 slots")
+        for i, line in enumerate(lines):
+            if line:
+                text(x + 8, nonlocal_y + 30 + i * 12, line,
+                     size=body_size, color=INK)
 
     labeled_box(M, 250, "PRODUCER", content.producer_block)
     labeled_box(M + 266, 250, "INSURED", f"{content.insured_name}\n{content.insured_address}")
@@ -191,7 +196,6 @@ def render_fallback_certificate(
     # and what survived could still print outside the box. Wrap to the box
     # width and let the box grow. One- and two-line descriptions are
     # positioned exactly as before.
-    from acord25_2016_overlay import _wrap_block, _fit_size
     _desc_text = content.description_of_operations or ""
     _desc_w = (612 - M - 8) - (M + 8)
     _desc_size = _fit_size([_desc_text], _desc_w, 4, size=8.0, min_size=6.0, step=0.5)
@@ -209,12 +213,16 @@ def render_fallback_certificate(
     text(M + 8, y + 14, "CERTIFICATE HOLDER", size=7.5, color=GOLD_DARK, bold=True)
     ty = y + 30
     _hold_w = (M + 300 - 8) - (M + 8)
-    for _para in f"{content.holder_name}\n{content.holder_address}".split("\n"):
-        for line in _wrap_block(_para, 8.5, _hold_w):
-            if not line:
-                continue
-            text(M + 8, ty, line, size=8.5, color=INK)
-            ty += 12
+    _holder_text = f"{content.holder_name}\n{content.holder_address}"
+    _holder_size = _fit_size([_holder_text], _hold_w, 4, size=8.5,
+                             min_size=6.0, step=0.5)
+    _holder_lines = _wrap_block(_holder_text, _holder_size, _hold_w)
+    if len(_holder_lines) > 4:
+        raise TextOverflowError(
+            f"certificate holder: {len(_holder_lines)} lines will not fit 4 slots")
+    for _i, line in enumerate(_holder_lines):
+        if line:
+            text(M + 8, ty + _i * 12, line, size=_holder_size, color=INK)
 
     # Authorized representative
     page.draw_rect(fitz.Rect(M + 316, y, 612 - M, y + 70), color=GOLD_DARK, width=0.6, fill=CREAM)

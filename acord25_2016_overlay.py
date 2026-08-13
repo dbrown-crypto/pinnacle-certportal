@@ -361,12 +361,9 @@ def _put_name_block(page, box, name, address, label):
     _lines(block, n) used to do.
     """
     max_width = box["x_right"] - box["x"]
-    addr_paras = _lines(address, 99)
     for nsize, asize in NAME_BLOCK_LADDER:
         nlines = _wrap_block(name, nsize, max_width) if name else []
-        alines = []
-        for para in addr_paras:
-            alines.extend(_wrap_block(para, asize, max_width))
+        alines = _wrap_block(address, asize, max_width) if address else []
         if len(nlines) + len(alines) <= box["lines"]:
             break
     else:
@@ -399,10 +396,17 @@ def _draw_description(page, paragraphs, stamp):
     size = _fit_size(list(paragraphs) + [stamp], max_width, box["lines"])
 
     stamp_lines = _wrap_block(stamp, size, max_width)
+    # Track actual source paragraphs, including explicit blank paragraphs.
+    # A top-level item may itself contain newlines (the UI assembles wording
+    # that way), so using only the item's list index would erase those breaks
+    # when rebuilding text for the wider ACORD 101 remarks field.
     body = []
-    for idx, para in enumerate(paragraphs):
-        for ln in _wrap_block(para, size, max_width):
-            body.append((idx, ln))
+    source_idx = 0
+    for block in paragraphs:
+        for para in str(block).split("\n"):
+            for ln in _wrap_paragraph(para, size, max_width):
+                body.append((source_idx, ln))
+            source_idx += 1
 
     overflow = ""
     room = box["lines"] - len(stamp_lines)
@@ -414,7 +418,10 @@ def _draw_description(page, paragraphs, stamp):
                 groups[-1][1].append(ln)
             else:
                 groups.append((idx, [ln]))
-        overflow = "\n".join(" ".join(g[1]).strip() for g in groups).strip()
+        # Join wrapped fragments inside each source paragraph with spaces, but
+        # restore explicit paragraph boundaries with newlines. Do not strip
+        # the result: a blank paragraph is meaningful and consumes a slot.
+        overflow = "\n".join(" ".join(g[1]).strip() for g in groups)
         body = body[:keep] + [(None, OVERFLOW_NOTE)]
 
     _put_block(page, box, [ln for _, ln in body] + stamp_lines, size,
@@ -439,7 +446,10 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     _put(page, C, "date", content.issue_date.strftime("%m/%d/%Y"))
     _put(page, C, "cert_number", content.cert_number, SIZE_BLOCK)
 
-    plines = _lines(content.producer_block, 5)
+    # Do not use _lines(..., n) for a free-form block: its slice silently
+    # discards data before the fitting guard can see it.
+    plines = [p.strip() for p in str(content.producer_block or "").split("\n")
+              if p.strip()]
     _put_name_block(page, BOX_PRODUCER, plines[0] if plines else "",
                     "\n".join(plines[1:]), "producer")
 
