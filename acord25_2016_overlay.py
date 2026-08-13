@@ -25,6 +25,33 @@ SIZE = 7.0
 SIZE_BLOCK = 8.0
 INK = (0.0, 0.0, 0.0)
 
+
+class TextOverflowError(ValueError):
+    """A line would print past its box border, or a block will not fit.
+
+    Raised instead of drawing, because text that runs off the right edge is
+    invisible in the rendered PDF: the cert looks fine and the wording is
+    simply gone. Callers should route to manual issuance rather than ship.
+    """
+
+
+# Free-form text boxes, measured off the 2016/03 template. x_right is the
+# printed border less the 6pt inset, so max width = x_right - x. y0 is the
+# first baseline and matches the coordinates already in C25 -- no field has
+# moved. `lines` is how many baselines fit above the box's bottom border.
+BOX_DESC = {"x": 24.0, "x_right": 588.0, "y0": 580.0, "leading": 9.0, "lines": 8}
+BOX_HOLDER = {"x": 24.0, "x_right": 300.0, "y0": 668.0, "leading": 9.0, "lines": 3}
+BOX_INSURED = {"x": 24.0, "x_right": 325.0, "y0": 195.0, "leading": 9.0, "lines": 3}
+BOX_PRODUCER = {"x": 24.0, "x_right": 325.0, "y0": 134.0, "leading": 9.0, "lines": 5}
+
+# Description shrinks 7.0 -> 6.5 -> 6.0 before anything is carried to the 101.
+MIN_SIZE = 6.0
+SIZE_STEP = 0.5
+OVERFLOW_NOTE = "See ACORD 101 Additional Remarks Schedule attached."
+CONTINUATION_HEADING = "DESCRIPTION OF OPERATIONS (continued):"
+# Name/address blocks step both sizes together rather than carrying anywhere.
+NAME_BLOCK_LADDER = ((SIZE_BLOCK, SIZE), (7.5, 6.5), (7.0, 6.5), (6.5, 6.0), (6.0, 6.0))
+
 # Producer e-mail printed when the producer block omits one (shared COI inbox).
 PRODUCER_EMAIL_FALLBACK = "certs@pinnacleriskad.com"
 
@@ -89,6 +116,9 @@ C25 = {
     # DESCRIPTION OF OPERATIONS (label y566.6)
     "desc1": (24, 580), "desc2": (24, 589), "desc3": (24, 598),
     "desc4": (24, 607), "desc5": (24, 616),
+    # Slots 6-8 were always inside the box (bottom border y=648) but unused,
+    # so long wording spilled to the 101 three lines earlier than it needed to.
+    "desc6": (24, 625), "desc7": (24, 634), "desc8": (24, 643),
 
     "holder_l1": (24, 668), "holder_l2": (24, 677), "holder_l3": (24, 686),
     "auth_rep":  (405, 706),
@@ -219,10 +249,189 @@ def _money(v):
         return str(v)
 
 
-def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature_rect=None):
+# ---------------------------------------------------------------------------
+# Width-aware text fitting
+#
+# Every free-form block goes through here. Widths come from the real font
+# metrics via fitz.get_text_length, never character counts, so the measured
+# width is exactly what PyMuPDF will draw.
+# ---------------------------------------------------------------------------
+
+def _text_width(s, size):
+    return fitz.get_text_length(str(s), fontname=FONT, fontsize=size)
+
+
+def _break_token(word, size, max_width):
+    """Split one token that is wider than the box (long VIN, e-mail, URL)."""
+    parts = []
+    while _text_width(word, size) > max_width:
+        cut = len(word)
+        while cut > 1 and _text_width(word[:cut], size) > max_width:
+            cut -= 1
+        if cut == 1 and _text_width(word[0], size) > max_width + 0.01:
+            raise TextOverflowError(
+                "glyph %r is %.1fpt at %.1fpt and cannot fit a %.1fpt box"
+                % (word[0], _text_width(word[0], size), size, max_width))
+        parts.append(word[:cut])
+        word = word[cut:]
+    if word:
+        parts.append(word)
+    return parts
+
+
+def _wrap_paragraph(text, size, max_width):
+    """Wrap one paragraph on word boundaries. Never returns an over-wide line."""
+    words = str(text).split()
+    if not words:
+        return [""]
+    lines, cur = [], ""
+    for word in words:
+        trial = word if not cur else cur + " " + word
+        if _text_width(trial, size) <= max_width:
+            cur = trial
+            continue
+        if cur:
+            lines.append(cur)
+            cur = ""
+        if _text_width(word, size) > max_width:
+            parts = _break_token(word, size, max_width)
+            lines.extend(parts[:-1])
+            cur = parts[-1]
+        else:
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _wrap_block(text, size, max_width):
+    """Wrap a block, preserving explicit newlines as paragraph breaks."""
+    out = []
+    for para in str(text).split("\n"):
+        if not para.strip():
+            out.append("")
+        else:
+            out.extend(_wrap_paragraph(para, size, max_width))
+    return out
+
+
+def _fit_size(paragraphs, max_width, max_lines, size=SIZE,
+              min_size=MIN_SIZE, step=SIZE_STEP):
+    """Largest size in [min_size, size] whose wrap fits, else min_size."""
+    s = size
+    while True:
+        n = sum(len(_wrap_block(p, s, max_width)) for p in paragraphs)
+        if n <= max_lines or round(s - step, 2) < min_size:
+            return s
+        s = round(s - step, 2)
+
+
+def _assert_fits(lines, size, max_width, label):
+    """Guard: refuse to draw anything that would cross the border."""
+    for ln in lines:
+        if not ln:
+            continue
+        w = _text_width(ln, size)
+        if w > max_width + 0.01:
+            raise TextOverflowError(
+                "%s: line is %.1fpt in a %.1fpt box (over by %.1fpt): %r"
+                % (label, w, max_width, w - max_width, ln))
+    return True
+
+
+def _put_block(page, box, lines, size, label):
+    """Draw pre-wrapped lines down a box. Guards every line before drawing."""
+    max_width = box["x_right"] - box["x"]
+    _assert_fits(lines, size, max_width, label)
+    if len(lines) > box["lines"]:
+        raise TextOverflowError("%s: %d lines will not fit %d slots"
+                                % (label, len(lines), box["lines"]))
+    for i, ln in enumerate(lines):
+        if not ln:
+            continue
+        page.insert_text((box["x"], box["y0"] + i * box["leading"]), ln,
+                         fontname=FONT, fontsize=size, color=INK)
+
+
+def _put_name_block(page, box, name, address, label):
+    """Name on the first baseline at SIZE_BLOCK, address below at SIZE.
+
+    Both are width-wrapped. If the wrapped result overruns the box, both sizes
+    step down together rather than silently dropping the tail, which is what
+    _lines(block, n) used to do.
+    """
+    max_width = box["x_right"] - box["x"]
+    addr_paras = _lines(address, 99)
+    for nsize, asize in NAME_BLOCK_LADDER:
+        nlines = _wrap_block(name, nsize, max_width) if name else []
+        alines = []
+        for para in addr_paras:
+            alines.extend(_wrap_block(para, asize, max_width))
+        if len(nlines) + len(alines) <= box["lines"]:
+            break
+    else:
+        raise TextOverflowError(
+            "%s: %d lines will not fit %d slots even at %.1fpt"
+            % (label, len(nlines) + len(alines), box["lines"], NAME_BLOCK_LADDER[-1][0]))
+
+    _assert_fits(nlines, nsize, max_width, label + " name")
+    _assert_fits(alines, asize, max_width, label + " address")
+    y = box["y0"]
+    for ln in nlines:
+        page.insert_text((box["x"], y), ln, fontname=FONT, fontsize=nsize, color=INK)
+        y += box["leading"]
+    for ln in alines:
+        page.insert_text((box["x"], y), ln, fontname=FONT, fontsize=asize, color=INK)
+        y += box["leading"]
+
+
+def _draw_description(page, paragraphs, stamp):
+    """Draw DESCRIPTION OF OPERATIONS, width-wrapped.
+
+    The data-currency stamp is reserved and always printed as the last line.
+    Previously the block was assembled as a list and truncated with desc[:5],
+    and because the stamp was appended last it was the first thing dropped.
+
+    Returns text that must be carried to the ACORD 101, or "" if all fit.
+    """
+    box = BOX_DESC
+    max_width = box["x_right"] - box["x"]
+    size = _fit_size(list(paragraphs) + [stamp], max_width, box["lines"])
+
+    stamp_lines = _wrap_block(stamp, size, max_width)
+    body = []
+    for idx, para in enumerate(paragraphs):
+        for ln in _wrap_block(para, size, max_width):
+            body.append((idx, ln))
+
+    overflow = ""
+    room = box["lines"] - len(stamp_lines)
+    if len(body) > room:
+        keep = max(room - 1, 0)
+        carried, groups = body[keep:], []
+        for idx, ln in carried:
+            if groups and groups[-1][0] == idx:
+                groups[-1][1].append(ln)
+            else:
+                groups.append((idx, [ln]))
+        overflow = "\n".join(" ".join(g[1]).strip() for g in groups).strip()
+        body = body[:keep] + [(None, OVERFLOW_NOTE)]
+
+    _put_block(page, box, [ln for _, ln in body] + stamp_lines, size,
+               "description of operations")
+    return overflow
+
+
+def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature_rect=None,
+                      overflow_out=None):
     """content is a CertContent-like object. Trucking extras read from optional
     attributes if present: usdot, mc_number, drivers, trailers. Carrier rows may
-    carry a `deductible` and `naic`."""
+    carry a `deductible` and `naic`.
+
+    overflow_out: optional list. Any description text that will not fit the
+    ACORD 25 box is appended to it for the caller to carry to the ACORD 101.
+    Kept as an out-parameter so the return value stays the open doc and
+    existing callers are unaffected."""
     doc = fitz.open(blank_25_path)
     page = doc[0]
     C = C25
@@ -231,8 +440,8 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     _put(page, C, "cert_number", content.cert_number, SIZE_BLOCK)
 
     plines = _lines(content.producer_block, 5)
-    for i, ln in enumerate(plines):
-        _put(page, C, f"producer_l{i+1}", ln, SIZE_BLOCK if i == 0 else SIZE)
+    _put_name_block(page, BOX_PRODUCER, plines[0] if plines else "",
+                    "\n".join(plines[1:]), "producer")
 
     import re
     email = next((w for ln in plines for w in ln.replace(",", " ").split() if "@" in w), None) \
@@ -246,9 +455,8 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     _put(page, C, "contact_phone", phone)
     _put(page, C, "contact_email", email)
 
-    _put(page, C, "insured_l1", content.insured_name, SIZE_BLOCK)
-    for i, ln in enumerate(_lines(content.insured_address, 2)):
-        _put(page, C, f"insured_l{i+2}", ln)
+    _put_name_block(page, BOX_INSURED, content.insured_name,
+                    content.insured_address, "insured")
 
     # DOT# / MC#
     usdot = getattr(content, "usdot", None)
@@ -352,14 +560,19 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         amt = next(iter(lim.values()), None)
         desc.append(f"{c.get('line','')}: {c.get('carrier','')} {c.get('policy_number','')} "
                     f"${_money(amt) if amt is not None else ''}")
-    desc.append(f"Coverage data current as of {content.data_current_as_of.strftime('%m/%d/%Y')}. "
-                f"Issued as a matter of information only.")
-    for i, ln in enumerate(desc[:5]):
-        _put(page, C, f"desc{i+1}", ln)
+    stamp = (f"Coverage data current as of {content.data_current_as_of.strftime('%m/%d/%Y')}. "
+             f"Issued as a matter of information only.")
+    desc_overflow = _draw_description(page, desc, stamp)
+    if desc_overflow:
+        if overflow_out is None:
+            raise TextOverflowError(
+                "description of operations overflows the ACORD 25 box and no "
+                "overflow_out was supplied; %d characters would be lost"
+                % len(desc_overflow))
+        overflow_out.append(desc_overflow)
 
-    _put(page, C, "holder_l1", content.holder_name, SIZE_BLOCK)
-    for i, ln in enumerate(_lines(content.holder_address, 2)):
-        _put(page, C, f"holder_l{i+2}", ln)
+    _put_name_block(page, BOX_HOLDER, content.holder_name,
+                    content.holder_address, "certificate holder")
 
     # Signature: explicit arg > pinnacle_signature.png (next to module or CWD)
     # > text fallback. Resolver logs to stderr if the image can't be found.
@@ -373,8 +586,11 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     return doc  # return open doc so caller can append the 101 page
 
 
-def fill_acord101(content, blank_101_path):
-    """Fill the ACORD 101 AcroForm with trailers + drivers, return open doc."""
+def fill_acord101(content, blank_101_path, description_continued=""):
+    """Fill the ACORD 101 AcroForm with trailers + drivers, return open doc.
+
+    description_continued: text carried over from the ACORD 25 description
+    box, printed first under its own heading so nothing is lost."""
     doc = fitz.open(blank_101_path)
     page = doc[0]
     agency = _lines(content.producer_block, 1)
@@ -392,8 +608,11 @@ def fill_acord101(content, blank_101_path):
     if usdot or mc:
         insured_block += f"\nDOT# {usdot}   MC# {mc}"
 
-    # build remark text (power units + trailers + drivers, formatted)
-    remark = "POWER UNITS / TRUCKS:\n"
+    # build remark text (carried description + power units + trailers + drivers)
+    remark = ""
+    if description_continued:
+        remark += CONTINUATION_HEADING + "\n" + description_continued + "\n\n"
+    remark += "POWER UNITS / TRUCKS:\n"
     if vehicles:
         for v in vehicles:
             remark += f"  {v.get('description','')}   VIN {v.get('vin','')}   ${_money(v.get('value',0))}\n"
@@ -435,9 +654,24 @@ def fill_acord101(content, blank_101_path):
 
 def generate_trucking_cert(content, blank_25_path, blank_101_path=None,
                            include_101=True, signature_png_path=None, signature_rect=None) -> bytes:
-    doc25 = fill_acord25_2016(content, blank_25_path, signature_png_path, signature_rect)
-    if include_101 and blank_101_path:
-        doc101 = fill_acord101(content, blank_101_path)
+    carried = []
+    doc25 = fill_acord25_2016(content, blank_25_path, signature_png_path, signature_rect,
+                              overflow_out=carried)
+    carry_text = "\n".join(x for x in carried if x)
+
+    # The 101 is normally attached only for scheduled units, but overflowing
+    # description wording is the other reason to need one, so turn it on
+    # rather than fail when there is somewhere to put the text.
+    want_101 = bool(include_101 or carry_text)
+    if carry_text and not blank_101_path:
+        doc25.close()
+        raise TextOverflowError(
+            "description of operations overflows the ACORD 25 box and no ACORD 101 "
+            "template is available (set ACORD101_TEMPLATE_PATH); %d characters "
+            "would be lost. Shorten the wording or configure the 101."
+            % len(carry_text))
+    if want_101 and blank_101_path:
+        doc101 = fill_acord101(content, blank_101_path, description_continued=carry_text)
         doc25.insert_pdf(doc101)
         doc101.close()
     out = io.BytesIO()
