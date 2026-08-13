@@ -36,6 +36,7 @@ def payload(**changes):
         "policy_number": "AUTO-123",
         "coverage_limit": "$1,000,000",
         "carrier_naic": "",
+        "auto_symbols": "Scheduled, Hired, Non-Owned",
     }
     body.update(changes)
     return body
@@ -85,6 +86,7 @@ portal_id = r.json()["policy_id"]
 row = policy_rows[0]
 assert row["coverages"]["auto_liability"] == 1000000
 assert row["carriers"][0]["naic"] == "35190"
+assert row["carriers"][0]["autos"] == ["SCHEDULED", "HIRED", "NON-OWNED"]
 assert row["self_serve_enabled"] is True
 assert calls["get"][0][1]["email"] == "eq.client@example.com"
 
@@ -102,18 +104,31 @@ assert len(policy_rows) == 1
 assert policy_rows[0]["coverages"] == {"auto_liability": 1000000.0, "cargo": 100000.0}
 assert policy_rows[0]["self_serve_enabled"] is True
 
+# GL carries explicit form and aggregate basis so the ACORD boxes are not guessed.
+reset()
+gl = payload(
+    ghl_policy_id="ghl-gl-789", line_of_business="General Liability",
+    policy_number="GL-789", coverage_limit=1000000, aggregate_limit=2000000,
+    gl_coverage_form="Occurrence", gl_aggregate_basis="Policy",
+)
+r = client.post("/api/integrations/ghl/policies", json=gl, headers=AUTH)
+assert r.status_code == 200, r.text
+assert r.json()["active_lines"] == 3
+gl_row = next(c for c in policy_rows[0]["carriers"] if c["ghl_policy_id"] == "ghl-gl-789")
+assert gl_row["form"] == "OCCURRENCE" and gl_row["aggregate"] == "POLICY"
+
 # Retrying/updating Auto replaces that line rather than duplicating it.
 reset()
 r = client.post("/api/integrations/ghl/policies", json=payload(coverage_limit=750000), headers=AUTH)
 assert r.status_code == 200, r.text
-assert len(policy_rows[0]["carriers"]) == 2
+assert len(policy_rows[0]["carriers"]) == 3
 assert policy_rows[0]["coverages"]["auto_liability"] == 750000
 
 # Cancelling Cargo removes only Cargo; Auto stays active and self-serve.
 reset()
 r = client.post("/api/integrations/ghl/policies", json={**cargo, "status": "Cancelled", "coverage_limit": ""}, headers=AUTH)
 assert r.status_code == 200, r.text
-assert r.json()["active_lines"] == 1
+assert r.json()["active_lines"] == 2
 assert policy_rows[0]["status"] == "active"
 assert policy_rows[0]["self_serve_enabled"] is True
 
