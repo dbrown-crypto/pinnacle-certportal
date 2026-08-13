@@ -4,13 +4,14 @@ import os
 
 from fastapi.testclient import TestClient
 
-os.environ["GHL_POLICY_SYNC_SECRET"] = "test-sync-secret"
+TEST_SECRET = "test-sync-secret-with-at-least-32-bytes"
+os.environ["GHL_POLICY_SYNC_SECRET"] = TEST_SECRET
 
 import main
 
 
 client = TestClient(main.app)
-AUTH = {"Authorization": "Bearer test-sync-secret"}
+AUTH = {"Authorization": f"Bearer {TEST_SECRET}"}
 CLIENT_ID = "22222222-2222-2222-2222-222222222222"
 
 
@@ -132,6 +133,17 @@ assert r.status_code == 422, r.text
 assert not calls["get"] and not calls["upsert"]
 
 reset_calls()
+missing_freshness = payload()
+missing_freshness.pop("data_current_as_of")
+r = client.post(
+    "/api/integrations/ghl/policies",
+    json=missing_freshness,
+    headers=AUTH,
+)
+assert r.status_code == 422, r.text
+assert not calls["get"] and not calls["upsert"]
+
+reset_calls()
 r = client.post(
     "/api/integrations/ghl/policies",
     json=payload(carriers=[{"line": "Auto", "carrier": "Progressive"}]),
@@ -164,4 +176,3 @@ assert r.status_code == 409, r.text
 assert not calls["upsert"]
 
 print("PASS: authenticated create/update, cancellation lockout, validation, and ownership checks")
-
