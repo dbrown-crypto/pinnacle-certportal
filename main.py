@@ -553,3 +553,7 @@ def _build_field_map(policy: dict, req: CertRequest, cert_number: str) -> dict:
 # --- Owner (admin) issue-on-behalf, Phase 1. See admin_issue.py. ------------
 import admin_issue  # noqa: E402
 admin_issue.register(app)
+
+# --- GoHighLevel policy synchronization (writes snapshots; never issues). ----
+import ghl_policy_sync  # noqa: E402
+ghl_policy_sync.register(app)
