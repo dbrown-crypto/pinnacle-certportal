@@ -65,10 +65,14 @@ class PolicyLineSyncRequest(BaseModel):
         aliases = {
             "active": "active", "inforce": "active", "inforced": "active",
             "cancelled": "cancelled", "canceled": "cancelled",
-            "pending": "pending", "expired": "expired",
+            "pending": "pending",
+            "expired": "expired", "lapsed": "expired", "nonrenewed": "expired",
         }
         if normalized not in aliases:
-            raise ValueError("status must be Active, In Force, Pending, Cancelled, or Expired")
+            raise ValueError(
+                "status must be Active, In Force, Pending, Cancelled, "
+                "Expired, Lapsed, or Non-Renewed"
+            )
         return aliases[normalized]
 
     @field_validator(
