@@ -212,13 +212,14 @@ async function loadPolicies(){
   });
 }
 // ---- COVERAGE BUILDER ----
+// Always select the exact underwriting company from the declarations page.
 const CARRIER_NAIC = {
-  "Progressive Mountain Insurance Co": "35190",
+  "Progressive Mountain Insurance Company": "35190",
   "United Financial Casualty Co": "11770",
-  "Progressive Casualty Insurance Co": "24260",
+  "Progressive Casualty Insurance Company": "24260",
   "Progressive Express Insurance Co": "10193",
   "Great West Casualty Co": "11371",
-  "Canal Insurance Co": "10464",
+  "Canal Insurance Company": "10464",
   "Berkshire Hathaway Homestate Insurance Co": "20044",
   "National Liability & Fire Insurance Co": "20052",
   "National Indemnity Company": "20087",
@@ -227,7 +228,8 @@ const CARRIER_NAIC = {
   "Sentry Select Insurance Co": "21180",
   "Old Republic Insurance Co": "24147",
   "Acuity, A Mutual Insurance Co": "14184",
-  "Government Employees Insurance Co (GEICO)": "22063",
+  "GEICO Marine Insurance Company": "37923",
+  "Government Employees Insurance Company": "22063",
   "United States Liability Insurance Co": "25895"
 };
  
