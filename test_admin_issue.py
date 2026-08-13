@@ -218,5 +218,18 @@ r = client.post("/admin/issue-certificate", json=BODY, headers=HDR)
 check("P2: plain cert keeps standard signature behavior",
       r.status_code == 200 and gen_calls[-1]["sig"] == "/srv/sig.png", f"got {r.status_code}")
 
+# P2-10 renderer overflow is a refusal, not an unhandled 500
+from acord25_2016_overlay import TextOverflowError
+def _overflow_gen(*a, **k):
+    raise TextOverflowError("ACORD101_TEMPLATE_PATH is not configured")
+main.generate_certificate = _overflow_gen
+_reset(); main.sb_patch = fake_sb_patch
+r = client.post("/admin/issue-certificate", json=BODY, headers=HDR)
+detail = r.json().get("detail", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+check("P2: renderer overflow is refused with 409",
+      r.status_code == 409 and detail.get("status") == "refused", f"got {r.status_code} {r.text[:150]}")
+check("P2: overflow refusal writes no certificate row",
+      not any(t == "issued_certificates" for t, _ in calls["inserts"]))
+
 print(f"\nFINAL: {passed} passed, {failed} failed, {passed + failed} total")
 import sys as _s; _s.exit(0 if failed == 0 else 1)
