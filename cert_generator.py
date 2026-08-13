@@ -150,9 +150,13 @@ def render_fallback_certificate(
                        color=GOLD_DARK, width=0.6, fill=CREAM)
         text(x + 8, nonlocal_y + 16, label, size=7.5, color=GOLD_DARK, bold=True)
         ty = nonlocal_y + 30
-        for line in body.split("\n"):
-            text(x + 8, ty, line, size=8.5, color=INK)
-            ty += 12
+        from acord25_2016_overlay import _wrap_block as _wb
+        for _para in body.split("\n"):
+            for line in _wb(_para, 8.5, w - 16):
+                if not line:
+                    continue
+                text(x + 8, ty, line, size=8.5, color=INK)
+                ty += 12
 
     labeled_box(M, 250, "PRODUCER", content.producer_block)
     labeled_box(M + 266, 250, "INSURED", f"{content.insured_name}\n{content.insured_address}")
@@ -181,19 +185,36 @@ def render_fallback_certificate(
         y += 26
     y += 14
 
-    # Description of operations
-    page.draw_rect(fitz.Rect(M, y, 612 - M, y + 50), color=GOLD_DARK, width=0.6, fill=CREAM)
+    # Description of operations -- width-aware, never truncated.
+    # This used to draw content.description_of_operations[:120] as one
+    # unwrapped line: past 120 characters the wording was silently dropped,
+    # and what survived could still print outside the box. Wrap to the box
+    # width and let the box grow. One- and two-line descriptions are
+    # positioned exactly as before.
+    from acord25_2016_overlay import _wrap_block, _fit_size
+    _desc_text = content.description_of_operations or ""
+    _desc_w = (612 - M - 8) - (M + 8)
+    _desc_size = _fit_size([_desc_text], _desc_w, 4, size=8.0, min_size=6.0, step=0.5)
+    _desc_lines = _wrap_block(_desc_text, _desc_size, _desc_w) if _desc_text else []
+    _desc_h = max(50, 30 + len(_desc_lines) * 10)
+    page.draw_rect(fitz.Rect(M, y, 612 - M, y + _desc_h), color=GOLD_DARK, width=0.6, fill=CREAM)
     text(M + 8, y + 14, "DESCRIPTION OF OPERATIONS / LOCATIONS / VEHICLES", size=7, color=GOLD_DARK, bold=True)
-    text(M + 8, y + 30, content.description_of_operations[:120], size=8, color=INK)
-    y += 66
+    for _i, _ln in enumerate(_desc_lines):
+        if _ln:
+            text(M + 8, y + 30 + _i * 10, _ln, size=_desc_size, color=INK)
+    y += _desc_h + 16
 
     # Certificate holder
     page.draw_rect(fitz.Rect(M, y, M + 300, y + 70), color=GOLD_DARK, width=0.6, fill=CREAM)
     text(M + 8, y + 14, "CERTIFICATE HOLDER", size=7.5, color=GOLD_DARK, bold=True)
     ty = y + 30
-    for line in f"{content.holder_name}\n{content.holder_address}".split("\n"):
-        text(M + 8, ty, line, size=8.5, color=INK)
-        ty += 12
+    _hold_w = (M + 300 - 8) - (M + 8)
+    for _para in f"{content.holder_name}\n{content.holder_address}".split("\n"):
+        for line in _wrap_block(_para, 8.5, _hold_w):
+            if not line:
+                continue
+            text(M + 8, ty, line, size=8.5, color=INK)
+            ty += 12
 
     # Authorized representative
     page.draw_rect(fitz.Rect(M + 316, y, 612 - M, y + 70), color=GOLD_DARK, width=0.6, fill=CREAM)
