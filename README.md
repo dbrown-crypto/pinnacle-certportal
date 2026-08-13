@@ -90,8 +90,9 @@ custom-object workflow. It authenticates with
 `Authorization: Bearer $GHL_POLICY_SYNC_SECRET`, finds exactly one existing
 portal customer by `client_email`, and merges that customer's separate Auto,
 Cargo and GL records into one portal policy snapshot. Repeated events update
-the same line; an activated renewal replaces the prior line; a cancelled line
-is removed. The Auto line controls overall policy status and self-service.
+the same line; an activated renewal replaces the prior line; an inactive line
+(Cancelled, Lapsed, or Non-Renewed in GHL) is removed. The Auto line controls
+overall policy status and self-service.
 
 The payload includes the GHL record ID, customer email, insured identity,
 status/dates, line of business, exact underwriting company and NAIC, policy
