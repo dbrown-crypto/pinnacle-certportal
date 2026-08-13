@@ -79,6 +79,9 @@ Environment variables:
 | `AGENT_NOTIFY_EMAIL` | `dbrown@pinnacleriskad.com` |
 | `ADMIN_USER_IDS` | Your Supabase user UUID(s), comma-separated |
 | `GHL_POLICY_SYNC_SECRET` | Long random bearer secret shared only with the GoHighLevel policy workflow |
+| `ACORD25_TEMPLATE_PATH` | Path to your licensed ACORD 25 PDF (omit → branded sample) |
+| `SIGNATURE_PNG_PATH` | Your authorized-rep signature image (transparent PNG) |
+| `ALLOWED_ORIGINS` | Your Netlify URL(s) for CORS |
 
 ## GoHighLevel policy sync
 
@@ -95,9 +98,6 @@ and exact underwriting-company information. `self_serve_enabled` should be
 explicit. Any non-active status automatically forces it off. Driver payloads
 accept only first name, last name, and license state; DOB and license number are
 rejected.
-| `ACORD25_TEMPLATE_PATH` | Path to your licensed ACORD 25 PDF (omit → branded sample) |
-| `SIGNATURE_PNG_PATH` | Your authorized-rep signature image (transparent PNG) |
-| `ALLOWED_ORIGINS` | Your Netlify URL(s) for CORS |
 
 ### 3. Frontend (Netlify)
 Edit the CONFIG block at the top of **both** `index.html` and `admin.html`:
