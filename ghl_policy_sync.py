@@ -18,7 +18,7 @@ from typing import Optional
 
 import httpx
 from fastapi import Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from acord25_2016_overlay import CarrierIdentityError, _naic_for
 
@@ -139,8 +139,14 @@ class PolicyLineSyncRequest(BaseModel):
 
     @field_validator("coverage_limit", "aggregate_limit", "deductible", mode="before")
     @classmethod
-    def blank_number_to_none(cls, value):
-        return _normalize_ghl_money(value)
+    def blank_number_to_none(cls, value, info: ValidationInfo):
+        normalized = _normalize_ghl_money(value)
+        # GHL serializes an untouched optional Monetary field as "$0.00".
+        # Aggregate is required only for active GL; for other lines, zero means
+        # the field was not supplied rather than a real coverage value.
+        if info.field_name == "aggregate_limit" and normalized == 0:
+            return None
+        return normalized
 
     @field_validator("self_serve_enabled", mode="before")
     @classmethod
