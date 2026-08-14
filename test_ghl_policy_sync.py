@@ -1,7 +1,11 @@
 """No-network tests for the GoHighLevel policy-line synchronization endpoint."""
 
 import os
+import asyncio
+from unittest.mock import patch
 
+import httpx
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 TEST_SECRET = "test-sync-secret-with-at-least-32-bytes"
@@ -66,6 +70,7 @@ async def fake_resolve_contact_email(policy_id):
     return "client@example.com"
 
 
+real_resolve_contact_email = main.ghl_policy_sync._resolve_associated_contact_email
 main.ghl_policy_sync._resolve_associated_contact_email = fake_resolve_contact_email
 
 
@@ -244,6 +249,39 @@ relations = {"relations": [
 ]}
 assert extract(relations, "p1") == {"c1"}
 assert extract(relations, "p2") == {"c2"}
+
+# Upstream failures log only the safe stage and HTTP status. No record IDs,
+# response bodies, URLs, tokens, or customer data are included.
+class FakeAsyncClient:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def get(self, url, headers):
+        request = httpx.Request("GET", url)
+        return httpx.Response(422, request=request, text='{"message":"sensitive upstream detail"}')
+
+
+os.environ["GHL_PRIVATE_INTEGRATION_TOKEN"] = "test-private-integration-token"
+with patch.object(main.ghl_policy_sync.httpx, "AsyncClient", FakeAsyncClient), \
+     patch.object(main.ghl_policy_sync.logger, "warning") as warning:
+    try:
+        asyncio.run(real_resolve_contact_email("sensitive-policy-id"))
+        raise AssertionError("expected safe 502")
+    except HTTPException as exc:
+        assert exc.status_code == 502
+    warning.assert_called_once_with(
+        "GHL lookup failed stage=%s upstream_status=%s", "relations", 422,
+    )
+    rendered_log = " ".join(str(part) for part in warning.call_args.args)
+    assert "sensitive-policy-id" not in rendered_log
+    assert "sensitive upstream detail" not in rendered_log
+    assert "test-private-integration-token" not in rendered_log
 
 client_rows.append({"id": CLIENT_ID, "email": "client@example.com"})
 policy_rows[:] = [

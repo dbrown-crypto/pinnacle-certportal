@@ -11,6 +11,7 @@ import datetime as dt
 from decimal import Decimal, InvalidOperation
 import hmac
 import json
+import logging
 import os
 import re
 import uuid
@@ -26,6 +27,7 @@ from acord25_2016_overlay import CarrierIdentityError, _naic_for
 GHL_POLICY_NAMESPACE = uuid.UUID("91ae37d2-1ca5-4a58-bd2f-a213f65e9643")
 GHL_API_BASE = "https://services.leadconnectorhq.com"
 ALLOWED_AUTO_SYMBOLS = {"ANY", "OWNED", "SCHEDULED", "HIRED", "NON-OWNED"}
+logger = logging.getLogger(__name__)
 
 
 def _normalize_ghl_bool(value):
@@ -222,6 +224,7 @@ def _contact_ids_from_relations(payload: object, policy_id: str) -> set[str]:
 
 async def _resolve_associated_contact_email(policy_id: str) -> str:
     headers = _ghl_headers()
+    lookup_stage = "relations"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             relation_response = await client.get(
@@ -234,13 +237,26 @@ async def _resolve_associated_contact_email(policy_id: str) -> str:
                     409,
                     "Exactly one Contact must be associated with this GoHighLevel Policy before syncing.",
                 )
+            lookup_stage = "contact"
             contact_response = await client.get(
                 f"{GHL_API_BASE}/contacts/{next(iter(contact_ids))}", headers=headers,
             )
             contact_response.raise_for_status()
     except HTTPException:
         raise
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GHL lookup failed stage=%s upstream_status=%s",
+            lookup_stage,
+            exc.response.status_code,
+        )
+        raise HTTPException(502, "GoHighLevel association lookup failed; no portal data was changed.") from exc
     except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "GHL lookup failed stage=%s failure_type=%s",
+            lookup_stage,
+            type(exc).__name__,
+        )
         raise HTTPException(502, "GoHighLevel association lookup failed; no portal data was changed.") from exc
 
     payload = contact_response.json()
