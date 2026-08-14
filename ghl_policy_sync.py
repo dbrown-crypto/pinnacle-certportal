@@ -8,6 +8,7 @@ line into that snapshot; it never issues a certificate or creates a customer.
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal, InvalidOperation
 import hmac
 import json
 import os
@@ -24,6 +25,65 @@ from acord25_2016_overlay import CarrierIdentityError, _naic_for
 
 GHL_POLICY_NAMESPACE = uuid.UUID("91ae37d2-1ca5-4a58-bd2f-a213f65e9643")
 GHL_API_BASE = "https://services.leadconnectorhq.com"
+ALLOWED_AUTO_SYMBOLS = {"ANY", "OWNED", "SCHEDULED", "HIRED", "NON-OWNED"}
+
+
+def _normalize_ghl_bool(value):
+    """Normalize GHL checkbox serializations before Pydantic validates them."""
+    if isinstance(value, list):
+        if not value:
+            return False
+        value = value[0] if len(value) == 1 else value
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return False
+        if normalized in {"false", "0", "no", "off", "disabled", "unchecked"}:
+            return False
+        # GHL may send the selected checkbox label rather than a boolean.
+        return True
+    return value
+
+
+def _normalize_ghl_money(value):
+    """Strip GHL currency formatting while leaving validity to the schema."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip().replace("$", "").replace(",", "")
+        if not cleaned:
+            return None
+        try:
+            return Decimal(cleaned)
+        except InvalidOperation:
+            return None
+    return value
+
+
+def _normalize_ghl_multi(value) -> list[str]:
+    """Accept GHL arrays, JSON arrays, or comma-delimited checkbox text."""
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            value = decoded if isinstance(decoded, list) else value
+        except json.JSONDecodeError:
+            pass
+        if isinstance(value, str):
+            value = value.split(",")
+    if not isinstance(value, (list, tuple, set)):
+        return value
+    normalized: list[str] = []
+    for item in value:
+        symbol = str(item).strip().upper()
+        if symbol in ALLOWED_AUTO_SYMBOLS and symbol not in normalized:
+            normalized.append(symbol)
+    return normalized
 
 
 class PolicyLineSyncRequest(BaseModel):
@@ -80,43 +140,17 @@ class PolicyLineSyncRequest(BaseModel):
     @field_validator("coverage_limit", "aggregate_limit", "deductible", mode="before")
     @classmethod
     def blank_number_to_none(cls, value):
-        if value is None or value == "":
-            return None
-        if isinstance(value, str):
-            return value.replace("$", "").replace(",", "").strip()
-        return value
+        return _normalize_ghl_money(value)
 
     @field_validator("self_serve_enabled", mode="before")
     @classmethod
     def normalize_checkbox(cls, value):
-        if isinstance(value, list):
-            value = value[0] if len(value) == 1 else value
-        if value is None or value is False:
-            return value
-        if isinstance(value, str):
-            normalized = value.strip().lower()
-            if not normalized:
-                return False
-            if normalized in {"true", "1", "yes", "on", "enabled"}:
-                return True
-            if normalized in {"false", "0", "no", "off", "disabled"}:
-                return False
-        return value
+        return _normalize_ghl_bool(value)
 
     @field_validator("auto_symbols", mode="before")
     @classmethod
     def normalize_auto_symbols(cls, value):
-        if value is None or value == "":
-            return []
-        if isinstance(value, str):
-            try:
-                decoded = json.loads(value)
-                if isinstance(decoded, list):
-                    return decoded
-            except json.JSONDecodeError:
-                pass
-            return [part.strip() for part in value.split(",") if part.strip()]
-        return value
+        return _normalize_ghl_multi(value)
 
     @model_validator(mode="after")
     def policy_line_is_complete(self):
