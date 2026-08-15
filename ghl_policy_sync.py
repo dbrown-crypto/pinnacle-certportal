@@ -211,11 +211,23 @@ def _ghl_params() -> dict[str, object]:
 
 
 def _contact_ids_from_relations(payload: object, policy_id: str) -> set[str]:
+    """Extract associated Contact record IDs from a GHL relations response.
+
+    The /associations/relations/{recordId} endpoint is already scoped to a
+    single Policy record, so every relation returned belongs to that policy.
+    We therefore take whichever side of the relation is a Contact, without
+    requiring the policy side to match policy_id byte-for-byte -- GHL's merge
+    field and its API can disagree on ID formatting, and an exact comparison
+    silently discarded every relation.
+    """
     if isinstance(payload, list):
         relations = payload
     elif isinstance(payload, dict):
         relations = payload.get("relations") or payload.get("data") or []
     else:
+        relations = []
+
+    if not isinstance(relations, list):
         relations = []
 
     contact_ids: set[str] = set()
@@ -226,10 +238,24 @@ def _contact_ids_from_relations(payload: object, policy_id: str) -> set[str]:
         second_key = str(relation.get("secondObjectKey", "")).lower()
         first_id = str(relation.get("firstRecordId", "")).strip()
         second_id = str(relation.get("secondRecordId", "")).strip()
-        if first_id == policy_id and second_key in {"contact", "contacts"} and second_id:
+
+        # "contact" in key tolerates contact / contacts / contacts.contact
+        if "contact" in second_key and second_id and second_id != policy_id:
             contact_ids.add(second_id)
-        if second_id == policy_id and first_key in {"contact", "contacts"} and first_id:
+        if "contact" in first_key and first_id and first_id != policy_id:
             contact_ids.add(first_id)
+
+    # Diagnostic only -- object keys and counts, never IDs or customer data.
+    logger.warning(
+        "GHL relations raw_count=%s parsed=%s keys=%s",
+        len(relations),
+        len(contact_ids),
+        [
+            (r.get("firstObjectKey"), r.get("secondObjectKey"))
+            for r in relations
+            if isinstance(r, dict)
+        ][:5],
+    )
     return contact_ids
 
 
