@@ -420,11 +420,38 @@ def register(app):
         _verify_secret(authorization)
 
         client_email = await _resolve_associated_contact_email(body.ghl_policy_id.strip())
-        clients = await m.sb_get("clients", {
-            "email": f"eq.{client_email}", "select": "id,email", "limit": "2",
+
+        # PostgREST "eq" is case-sensitive. _resolve_associated_contact_email
+        # lowercases the GoHighLevel email, so a portal customer stored as
+        # "Dispatch@CTHLogistics.com" could never match and the sync 409'd
+        # forever even though the customer existed. "ilike" compares without
+        # regard to case; because LIKE treats "%" and "_" as wildcards and "_"
+        # is legal in an email local part, we re-check exact equality in Python
+        # so a wildcard can only ever widen the candidate set, never the match.
+        candidates = await m.sb_get("clients", {
+            "email": f"ilike.{client_email}", "select": "id,email", "limit": "10",
         })
+        clients = [
+            c for c in candidates
+            if str(c.get("email", "")).strip().lower() == client_email
+        ]
         if len(clients) != 1:
-            raise HTTPException(409, "Exactly one portal customer must match the associated Contact email before syncing.")
+            # Diagnostic only -- counts and the email domain. Never the local
+            # part, the contact id, or any other customer data.
+            logger.warning(
+                "portal customer match failed count=%s candidates=%s domain=%s",
+                len(clients),
+                len(candidates),
+                client_email.rsplit("@", 1)[-1],
+            )
+            raise HTTPException(
+                409,
+                "No portal customer matches the associated Contact email; "
+                "create the portal customer first."
+                if not clients
+                else "Multiple portal customers share the associated Contact "
+                     "email; de-duplicate them before syncing.",
+            )
         client_id = clients[0]["id"]
 
         if body.portal_policy_id:
