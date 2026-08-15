@@ -74,6 +74,19 @@ real_resolve_contact_email = main.ghl_policy_sync._resolve_associated_contact_em
 main.ghl_policy_sync._resolve_associated_contact_email = fake_resolve_contact_email
 
 
+# Relation lookups require the sub-account location and bounded pagination.
+os.environ["GHL_LOCATION_ID"] = "test-location-id"
+assert main.ghl_policy_sync._ghl_params() == {
+    "locationId": "test-location-id", "limit": 100, "skip": 0,
+}
+with patch.dict(os.environ, {}, clear=True):
+    try:
+        main.ghl_policy_sync._ghl_params()
+        raise AssertionError("expected missing GHL location configuration to fail closed")
+    except HTTPException as exc:
+        assert exc.status_code == 503
+
+
 def reset():
     calls["get"].clear()
     calls["upsert"].clear()
@@ -262,7 +275,9 @@ class FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def get(self, url, headers):
+    async def get(self, url, headers, params=None):
+        if "/associations/relations/" in url:
+            assert params == {"locationId": "test-location-id", "limit": 100, "skip": 0}
         request = httpx.Request("GET", url)
         return httpx.Response(422, request=request, text='{"message":"sensitive upstream detail"}')
 
