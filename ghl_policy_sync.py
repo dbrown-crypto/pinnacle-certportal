@@ -199,6 +199,17 @@ def _ghl_headers() -> dict[str, str]:
     }
 
 
+def _ghl_location_id() -> str:
+    location_id = os.environ.get("GHL_LOCATION_ID", "").strip()
+    if not location_id:
+        raise HTTPException(503, "GoHighLevel association lookup is not configured.")
+    return location_id
+
+
+def _ghl_params() -> dict[str, object]:
+    return {"locationId": _ghl_location_id(), "limit": 100, "skip": 0}
+
+
 def _contact_ids_from_relations(payload: object, policy_id: str) -> set[str]:
     if isinstance(payload, list):
         relations = payload
@@ -228,7 +239,9 @@ async def _resolve_associated_contact_email(policy_id: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             relation_response = await client.get(
-                f"{GHL_API_BASE}/associations/relations/{policy_id}", headers=headers,
+                f"{GHL_API_BASE}/associations/relations/{policy_id}",
+                headers=headers,
+                params=_ghl_params(),
             )
             relation_response.raise_for_status()
             contact_ids = _contact_ids_from_relations(relation_response.json(), policy_id)
