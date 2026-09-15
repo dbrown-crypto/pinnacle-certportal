@@ -42,12 +42,18 @@ class CarrierIdentityError(ValueError):
 
 # Free-form text boxes, measured off the 2016/03 template. x_right is the
 # printed border less the 6pt inset, so max width = x_right - x. y0 is the
-# first baseline and matches the coordinates already in C25 -- no field has
-# moved. `lines` is how many baselines fit above the box's bottom border.
-BOX_DESC = {"x": 24.0, "x_right": 588.0, "y0": 580.0, "leading": 9.0, "lines": 8}
-BOX_HOLDER = {"x": 24.0, "x_right": 300.0, "y0": 668.0, "leading": 9.0, "lines": 3}
-BOX_INSURED = {"x": 24.0, "x_right": 325.0, "y0": 195.0, "leading": 9.0, "lines": 3}
-BOX_PRODUCER = {"x": 24.0, "x_right": 325.0, "y0": 134.0, "leading": 9.0, "lines": 5}
+# first baseline; each sits one clear line under the box's printed label
+# (label bottoms: PRODUCER 129.2, INSURED 189.2, DESCRIPTION 573.2,
+# CERTIFICATE HOLDER 659.7) so 8pt caps no longer touch the label.
+# `lines` is how many baselines fit above the box's bottom border
+# (PRODUCER 180, INSURED 240, DESCRIPTION 648, HOLDER 707.9).
+BOX_DESC = {"x": 24.0, "x_right": 588.0, "y0": 582.0, "leading": 9.0, "lines": 8}
+BOX_HOLDER = {"x": 24.0, "x_right": 300.0, "y0": 671.0, "leading": 9.5, "lines": 3}
+BOX_INSURED = {"x": 24.0, "x_right": 300.0, "y0": 200.0, "leading": 9.5, "lines": 3}
+BOX_PRODUCER = {"x": 24.0, "x_right": 300.0, "y0": 140.0, "leading": 9.0, "lines": 5}
+# DOT# / MC# prints on the baseline directly under the insured address rather
+# than at a fixed y=235, which left it floating at the bottom of the box.
+DOT_MC_GAP = 1.5   # extra points between the address and the DOT# line
 
 # Description shrinks 7.0 -> 6.5 -> 6.0 before anything is carried to the 101.
 MIN_SIZE = 6.0
@@ -104,7 +110,8 @@ C25 = {
 
     "contact_name":  (400, 127), "contact_phone": (400, 140), "contact_email": (400, 153),
 
-    "insurer_a":     (345, 179), "insurer_b": (345, 191), "insurer_c": (345, 203),
+    # "INSURER A :" label ends at x=347.1; start the name clear of the colon.
+    "insurer_a":     (351, 179), "insurer_b": (351, 191), "insurer_c": (351, 203),
     "naic_a":        (560, 179), "naic_b": (560, 191), "naic_c": (560, 203),
 
     "insured_l1":    (24, 195), "insured_l2": (24, 204), "insured_l3": (24, 213),
@@ -409,22 +416,27 @@ def _put_name_block(page, box, name, address, label):
     for ln in alines:
         page.insert_text((box["x"], y), ln, fontname=FONT, fontsize=asize, color=INK)
         y += box["leading"]
+    # Next free baseline, so a caller can print one more line (DOT#/MC#)
+    # directly under the block instead of at a fixed spot in the box.
+    return y
 
 
-def _draw_description(page, paragraphs, stamp):
+def _draw_description(page, paragraphs, stamp=""):
     """Draw DESCRIPTION OF OPERATIONS, width-wrapped.
 
-    The data-currency stamp is reserved and always printed as the last line.
-    Previously the block was assembled as a list and truncated with desc[:5],
-    and because the stamp was appended last it was the first thing dropped.
+    `stamp`, when given, is reserved and always printed as the last line
+    (so it can never be the first thing dropped on overflow). Production no
+    longer prints one: the DATE box top-right is the currency date and the
+    ACORD form already carries the information-only language.
 
     Returns text that must be carried to the ACORD 101, or "" if all fit.
     """
     box = BOX_DESC
     max_width = box["x_right"] - box["x"]
-    size = _fit_size(list(paragraphs) + [stamp], max_width, box["lines"])
+    fit_input = list(paragraphs) + ([stamp] if stamp else [])
+    size = _fit_size(fit_input, max_width, box["lines"])
 
-    stamp_lines = _wrap_block(stamp, size, max_width)
+    stamp_lines = _wrap_block(stamp, size, max_width) if stamp else []
     # Track actual source paragraphs, including explicit blank paragraphs.
     # A top-level item may itself contain newlines (the UI assembles wording
     # that way), so using only the item's list index would erase those breaks
@@ -494,14 +506,16 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     _put(page, C, "contact_phone", phone)
     _put(page, C, "contact_email", email)
 
-    _put_name_block(page, BOX_INSURED, content.insured_name,
-                    content.insured_address, "insured")
+    next_y = _put_name_block(page, BOX_INSURED, content.insured_name,
+                             content.insured_address, "insured")
 
-    # DOT# / MC#
+    # DOT# / MC# on the line right under the address, flush with it.
     usdot = getattr(content, "usdot", None)
     mc = getattr(content, "mc_number", None)
-    dot_mc = "  ".join(x for x in [f"DOT# {usdot}" if usdot else "", f"MC# {mc}" if mc else ""] if x)
-    _put(page, C, "dot_mc", dot_mc)
+    dot_mc = "   ".join(x for x in [f"DOT# {usdot}" if usdot else "", f"MC# {mc}" if mc else ""] if x)
+    if dot_mc:
+        page.insert_text((BOX_INSURED["x"], next_y + DOT_MC_GAP), dot_mc,
+                         fontname=FONT, fontsize=SIZE, color=INK)
 
     carriers = content.coverages or []
     insurer_order = []
@@ -568,7 +582,7 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
     cargo = next((c for c in carriers if "cargo" in str(c.get("line", "")).lower()), None)
     if cargo:
         _put_center(page, COL["ltr"], BAND_Y["cargo"], letter_for.get(cargo.get("carrier"), ""))
-        _put(page, C, "cargo_label", "MOTOR TRUCK CARGO", SIZE_BLOCK)
+        _put(page, C, "cargo_label", "MOTOR TRUCK CARGO", SIZE)
         _put_center(page, COL["policy"], BAND_Y["cargo"], cargo.get("policy_number"))
         _put_center(page, COL["eff"], BAND_Y["cargo"], _expand_year(cargo.get("eff")))
         _put_center(page, COL["exp"], BAND_Y["cargo"], _expand_year(cargo.get("exp")))
@@ -580,13 +594,16 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
         # Stacking each short string right-aligned to 592 keeps both clear of
         # the divider and inside the right border. Band is y528-564 (center 546);
         # 542/554 sit one line above/below center.
+        # The limit shares the row baseline (546) with the policy number and
+        # dates so the row reads as one line; the deductible sits one line
+        # below it. Both stay right-aligned to LIMIT_RIGHT.
         lim = cargo.get("limits") or {}
         amt = next(iter(lim.values()), None)
         if amt is not None:
-            _put_right(page, LIMIT_RIGHT, 542.0, f"${_money(amt)}")
+            _put_right(page, LIMIT_RIGHT, BAND_Y["cargo"], f"${_money(amt)}")
         ded = cargo.get("deductible")
         if ded is not None:
-            _put_right(page, LIMIT_RIGHT, 554.0, f"${_money(ded)} Ded")
+            _put_right(page, LIMIT_RIGHT, BAND_Y["cargo"] + 10.0, f"${_money(ded)} Ded")
 
     # description: ops + any other coverages + stamp
     desc = []
@@ -597,11 +614,19 @@ def fill_acord25_2016(content, blank_25_path, signature_png_path=None, signature
             continue
         lim = c.get("limits") or {}
         amt = next(iter(lim.values()), None)
-        desc.append(f"{c.get('line','')}: {c.get('carrier','')} {c.get('policy_number','')} "
-                    f"${_money(amt) if amt is not None else ''}")
-    stamp = (f"Coverage data current as of {content.data_current_as_of.strftime('%m/%d/%Y')}. "
-             f"Issued as a matter of information only.")
-    desc_overflow = _draw_description(page, desc, stamp)
+        parts = [f"{c.get('line', '')}:"]
+        if amt is not None:
+            parts.append(f"${_money(amt)} limit,")
+        parts.append(f"{c.get('carrier', '')}, Policy {c.get('policy_number', '')}")
+        eff, exp = _expand_year(c.get("eff")), _expand_year(c.get("exp"))
+        if eff and exp:
+            parts.append(f"({eff} to {exp})")
+        desc.append(" ".join(p for p in parts if p.strip()))
+    # No trailing stamp: the DATE box (top right) already states when the
+    # cert was issued, and the preprinted ACORD language already says it is
+    # issued as a matter of information only. Holders read the old dated
+    # "current as of" line as the cert being stale.
+    desc_overflow = _draw_description(page, desc)
     if desc_overflow:
         if overflow_out is None:
             raise TextOverflowError(
@@ -641,43 +666,68 @@ def fill_acord101(content, blank_101_path, description_continued=""):
     trailers = getattr(content, "trailers", []) or []
     vehicles = getattr(content, "vehicles", []) or []
 
-    insured_block = content.insured_name
-    for ln in _lines(content.insured_address, 2):
-        insured_block += "\n" + ln
-    if usdot or mc:
-        insured_block += f"\nDOT# {usdot}   MC# {mc}"
+    dot_mc = "   ".join(x for x in [f"DOT# {usdot}" if usdot else "",
+                                    f"MC# {mc}" if mc else ""] if x)
 
-    # build remark text (carried description + power units + trailers + drivers)
+    def _unit(u):
+        line = f"    {u.get('description', '')}   VIN {u.get('vin', '')}"
+        val = u.get("value") or 0
+        try:
+            val = int(val)
+        except Exception:
+            val = 0
+        if val > 0:
+            line += f"   Stated value ${_money(val)}"
+        return line + "\n"
+
+    # Remark text: carried description, then power units, trailers and
+    # drivers as spaced sections with indented entries.
     remark = ""
     if description_continued:
         remark += CONTINUATION_HEADING + "\n" + description_continued + "\n\n"
-    remark += "POWER UNITS / TRUCKS:\n"
+    remark += "SCHEDULED POWER UNITS / TRUCKS\n"
     if vehicles:
         for v in vehicles:
-            remark += f"  {v.get('description','')}   VIN {v.get('vin','')}   ${_money(v.get('value',0))}\n"
+            remark += _unit(v)
     else:
-        remark += "  (none scheduled)\n"
-    remark += "\nTRAILERS:\n"
+        remark += "    (none scheduled)\n"
+    remark += "\nSCHEDULED TRAILERS\n"
     if trailers:
         for t in trailers:
-            remark += f"  {t.get('description','')}   VIN {t.get('vin','')}   ${_money(t.get('value',0))}\n"
+            remark += _unit(t)
     else:
-        remark += "  (none scheduled)\n"
-    remark += "\nDRIVERS:\n"
+        remark += "    (none scheduled)\n"
+    remark += "\nSCHEDULED DRIVERS\n"
     if drivers:
         for d in drivers:
-            remark += f"  {d.get('first','')} {d.get('last','')}   {d.get('lic_state','')}\n"
+            name = f"{d.get('first', '')} {d.get('last', '')}".strip()
+            st = d.get("lic_state", "")
+            remark += f"    {name}" + (f"   ({st} license)" if st else "") + "\n"
     else:
-        remark += "  (none scheduled)\n"
+        remark += "    (none scheduled)\n"
+
+    # POLICY NUMBER / CARRIER / NAIC header from the primary (auto liability,
+    # else first) coverage, so the schedule page is not left half blank.
+    carriers = content.coverages or []
+    primary = next((c for c in carriers if "auto" in str(c.get("line", "")).lower()), None) \
+        or (carriers[0] if carriers else {})
+    primary_carrier = primary.get("carrier", "") or ""
+    try:
+        primary_naic = _naic_for(primary_carrier, primary.get("naic")) if primary_carrier else ""
+    except CarrierIdentityError:
+        primary_naic = primary.get("naic") or ""
 
     vals = {
+        "F[0].P1[0].Policy_PolicyNumberIdentifier_A[0]": primary.get("policy_number", "") or "",
+        "F[0].P1[0].Insurer_FullName_A[0]": primary_carrier,
+        "F[0].P1[0].Insurer_NAICCode_A[0]": primary_naic or "",
         "F[0].P1[0].Form_CurrentPageNumber_A[0]": "2",
         "F[0].P1[0].Form_TotalPageNumber_A[0]": "2",
         "F[0].P1[0].Producer_FullName_A[0]": agency,
         "F[0].P1[0].NamedInsured_FullName_A[0]": content.insured_name,
         "F[0].P1[0].NamedInsured_FullName_B[0]": (_lines(content.insured_address, 2) or [""])[0],
         "F[0].P1[0].NamedInsured_FullName_C[0]": (_lines(content.insured_address, 2) + ["", ""])[1],
-        "F[0].P1[0].NamedInsured_FullName_D[0]": f"DOT# {usdot}   MC# {mc}",
+        "F[0].P1[0].NamedInsured_FullName_D[0]": dot_mc,
         "F[0].P1[0].Policy_EffectiveDate_A[0]": content.issue_date.strftime("%m/%d/%Y"),
         "F[0].P1[0].AdditionalRemark_FormIdentifier_A[0]": "25",
         "F[0].P1[0].AdditionalRemark_FormName_A[0]": "CERTIFICATE OF LIABILITY INSURANCE",
@@ -686,6 +736,10 @@ def fill_acord101(content, blank_101_path, description_continued=""):
     for w in (page.widgets() or []):
         if w.field_name in vals:
             w.field_value = vals[w.field_name]
+            if "RemarkText" in w.field_name:
+                # Fixed 8pt with normal leading instead of the auto size the
+                # viewer picks, which packed the list into tiny cramped lines.
+                w.text_fontsize = 8.0
             w.update()
     doc.bake()  # flatten the AcroForm
     return doc

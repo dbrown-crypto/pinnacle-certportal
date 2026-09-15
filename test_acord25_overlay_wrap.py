@@ -39,10 +39,8 @@ FILLER = (
     "Filler clause confirms coverage subject to all policy terms conditions and "
     "exclusions always."
 )
-STAMP = (
-    "Coverage data current as of 08/13/2026. "
-    "Issued as a matter of information only."
-)
+# Legacy stamp: the drawer still supports a reserved last line, production passes none.
+STAMP = "Issued as a matter of information only."
 
 
 def content(wording=BROKEN_WORDING, **overrides):
@@ -132,7 +130,8 @@ class Acord25WrapTests(unittest.TestCase):
         self.assertIn("\n\nSECOND PARAGRAPH SURVIVES", carried)
 
     def test_overflow_without_scheduled_units_still_attaches_acord101(self):
-        wording = " ".join([FILLER] * 16)
+        # 22 repetitions overflow the 8-line box even at 6pt with no stamp.
+        wording = " ".join([FILLER] * 22)
         pdf = generate_trucking_cert(
             content(wording), ACORD25, ACORD101, include_101=False
         )
@@ -140,13 +139,14 @@ class Acord25WrapTests(unittest.TestCase):
         self.assertEqual(len(doc), 2)
         self.assertIn("DESCRIPTION OF OPERATIONS (continued):", doc[1].get_text())
         self.assertEqual(
-            sum(page.get_text().split().count("Filler") for page in doc), 16
+            sum(page.get_text().split().count("Filler") for page in doc), 22
         )
-        self.assertIn("Coverage data current as of", doc[0].get_text())
+        self.assertNotIn("Coverage data current as of", doc[0].get_text())
+        self.assertNotIn("matter of information only", doc[0].get_text())
         doc.close()
 
     def test_missing_acord101_refuses_instead_of_dropping_text(self):
-        wording = " ".join([FILLER] * 16)
+        wording = " ".join([FILLER] * 22)
         with self.assertRaisesRegex(TextOverflowError, "ACORD101_TEMPLATE_PATH"):
             generate_trucking_cert(
                 content(wording), ACORD25, blank_101_path=None, include_101=False
@@ -167,7 +167,29 @@ class Acord25WrapTests(unittest.TestCase):
             pdf = generate_certificate(content(), template_path=ACORD25)
         doc = fitz.open(stream=pdf, filetype="pdf")
         self.assertTrue(all(span["bbox"][2] <= 594.01 for span in spans(doc[0])))
-        self.assertIn("Coverage data current as of", doc[0].get_text())
+        self.assertNotIn("Coverage data current as of", doc[0].get_text())
+        self.assertNotIn("matter of information only", doc[0].get_text())
+        doc.close()
+
+    def test_dated_currency_stamp_is_gone_and_dot_sits_under_address(self):
+        pdf = generate_trucking_cert(
+            content(usdot="3444355", insured_name="DK FREIGHT MOVERS LLC",
+                    insured_address="2780 KEYSTONE AVE, LITHONIA, GA 30058"),
+            ACORD25, ACORD101, include_101=False)
+        doc = fitz.open(stream=pdf, filetype="pdf")
+        text = doc[0].get_text()
+        self.assertNotIn("current as of", text)
+        self.assertNotIn("Issued as a matter of information only", text)
+        by_text = {s["text"].strip(): s for s in spans(doc[0])}
+        addr = by_text["2780 KEYSTONE AVE, LITHONIA, GA 30058"]
+        dot = by_text["DOT# 3444355"]
+        # same left edge, and on the very next line (not floating at y~235)
+        self.assertAlmostEqual(addr["bbox"][0], dot["bbox"][0], delta=0.5)
+        self.assertLess(dot["bbox"][1] - addr["bbox"][3], 6.0)
+        # name/producer/holder text starts below its printed box label
+        self.assertGreater(by_text["DK FREIGHT MOVERS LLC"]["bbox"][1], 189.2)
+        self.assertGreater(by_text["Pinnacle Risk Advisors LLC"]["bbox"][1], 129.2)
+        self.assertGreater(by_text["Metro Trans Logistics LLC"]["bbox"][1], 659.7)
         doc.close()
 
     def test_guard_runs_before_drawing(self):
