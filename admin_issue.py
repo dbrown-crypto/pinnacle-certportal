@@ -195,10 +195,8 @@ def register(app):
             # the whole point of the guard is that this cannot ship silently.
             raise HTTPException(409, detail={
                 "status": "refused",
-                "message": "The description wording does not fit the certificate "
-                           "and no ACORD 101 continuation page is configured. "
-                           "Shorten the wording, or set ACORD101_TEMPLATE_PATH "
-                           "so the remainder can be carried.",
+                "message": "The certificate schedule or wording needs manual review "
+                           "before issuance. Check the details below.",
                 "detail": str(exc),
             })
 

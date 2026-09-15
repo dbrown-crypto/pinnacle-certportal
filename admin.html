@@ -132,9 +132,20 @@
           <label>Carriers JSON</label><textarea id="f_carriers" rows="4" placeholder='[{"line":"Auto Liability",...}]'></textarea>
         </div>
  
+        <fieldset style="border:1px solid var(--line);border-radius:8px;margin:14px 0;padding:10px">
+          <legend style="font-weight:600;font-size:12px">Apply common physical damage deductibles</legend>
+          <div class="muted" style="font-size:11px;margin-bottom:8px">Use only when these amounts apply to all listed power units and trailers. Apply first, then adjust individual vehicles as needed. Blank fields leave existing amounts unchanged.</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+            <label>Comprehensive deductible $<input id="bulk_comp" type="number" min="0" max="999999999.99" step="0.01" placeholder="Not entered"/></label>
+            <label>Collision deductible $<input id="bulk_collision" type="number" min="0" max="999999999.99" step="0.01" placeholder="Not entered"/></label>
+          </div>
+          <button type="button" class="act b-ghost" id="applyDeductibles">Apply to all listed vehicles</button>
+          <div id="deductibleMessage" role="status" class="muted" style="font-size:11px"></div>
+        </fieldset>
+
         <!-- Vehicles / Trailers (maps to policies.trailers — drives the ACORD 101 VIN schedule) -->
         <label style="font-weight:600;margin:14px 0 4px;display:block">Vehicles / Trailers</label>
-        <div class="muted" style="font-size:11px;margin-bottom:6px">Power units and trailers. Stated value prints next to the VIN on the cert.</div>
+        <div class="muted" style="font-size:11px;margin-bottom:6px">Enter only deductibles confirmed for this trailer. Blank means not entered. Values print beneath its VIN on ACORD 101.</div>
         <div id="vehLines"></div>
         <button type="button" class="act b-ghost" id="addVehicle" style="font-size:11px;margin-bottom:6px">+ Add vehicle</button>
  
@@ -161,6 +172,7 @@
 </div>
  
 <script src="admin-render.js"></script>
+<script src="admin-vehicles.js"></script>
 <script>
 // ---- CONFIG ----
 const SUPABASE_URL = "https://dvjnnhwuamwcvqoxmske.supabase.co";
@@ -450,51 +462,9 @@ function covToggleRaw() {
 }
  
 // ---- Vehicles / Trailers + Drivers (ACORD 101 schedule) ----
-function buildVehicleRowNode(d){
-  d=d||{};
-  const known=['vin','value','description'];
-  const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
-  const row = editorElement('div', {
-    className:'veh-row',
-    style:'display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:6px;margin-bottom:6px;align-items:end'
-  });
-  row.dataset.extra = JSON.stringify(extra);
-  const description = editorElement('input', {
-    className:'veh-desc', value:d.description || '', placeholder:'2015 Kenworth T680'
-  });
-  const vin = editorElement('input', {
-    className:'veh-vin', value:d.vin || '', placeholder:'1XKYDP8X3FJ422580'
-  });
-  const value = editorElement('input', {
-    className:'veh-val', type:'number', value:d.value != null ? d.value : ''
-  });
-  value.min='0'; value.step='1';
-  const remove = editorElement('button', {text:'✕', type:'button', className:'act b-stop'});
-  remove.style.cssText='font-size:11px';
-  remove.addEventListener('click', () => row.remove());
-  row.append(
-    editorField('Year / Make / Description', description, 'font-size:10px'),
-    editorField('VIN', vin, 'font-size:10px'),
-    editorField('Stated value $', value, 'font-size:10px'),
-    remove
-  );
-  return row;
-}
+function buildVehicleRowNode(d){ return PinnacleVehicles.build(d, 'veh'); }
 function vehAddRow(d){ document.getElementById('vehLines').appendChild(buildVehicleRowNode(d)); }
-function assembleVehicles(){
-  const out=[];
-  for(const row of document.querySelectorAll('#vehLines .veh-row')){
-    const desc=row.querySelector('.veh-desc').value.trim();
-    const vin=row.querySelector('.veh-vin').value.trim();
-    const valStr=row.querySelector('.veh-val').value.trim();
-    if(!desc && !vin && !valStr) continue; // skip blank rows
-    let extra={}; try{extra=JSON.parse(row.dataset.extra||'{}');}catch(e){}
-    const obj={...extra, vin, description:desc};
-    obj.value = valStr!=='' ? parseFloat(valStr) : 0;
-    out.push(obj);
-  }
-  return out;
-}
+function assembleVehicles(){ return PinnacleVehicles.assemble('#vehLines', 'veh'); }
 function buildDriverRowNode(d){
   d=d||{}; const known=['first','last','lic_state'];
   const extra={}; for(const k of Object.keys(d)){if(!known.includes(k)) extra[k]=d[k];}
@@ -599,7 +569,17 @@ function assembleCovData() {
   return {coverages, carriers, err:errMsg};
 }
  
+function clearBulkDeductibles(){
+  $('bulk_comp').value=''; $('bulk_collision').value=''; $('deductibleMessage').textContent='';
+}
+$('applyDeductibles').addEventListener('click', () => {
+  try {
+    const count=PinnacleVehicles.applyAll($('bulk_comp'), $('bulk_collision'));
+    $('deductibleMessage').textContent='Applied to '+count+' listed vehicles. Review individual amounts, then save the policy.';
+  } catch(e) { $('deductibleMessage').textContent=e.message; }
+});
 window.editPolicy = (p) => {
+  clearBulkDeductibles();
   $("f_id").value=p.id; $("f_client").value=p.client_id; $("f_insured").value=p.named_insured;
   $("f_dot").value=p.usdot||""; $("f_status").value=p.status; $("f_eff").value=p.effective_date;
   $("f_exp").value=p.expiration_date; $("f_addr").value=p.insured_address; $("f_asof").value=p.data_current_as_of;
@@ -621,6 +601,7 @@ window.editPolicy = (p) => {
   window.scrollTo({top:0,behavior:"smooth"});
 };
 $("clearForm").addEventListener('click', ()=>{
+  clearBulkDeductibles();
   ["f_id","f_client","f_insured","f_dot","f_addr"].forEach(i=>$(i).value="");
   document.getElementById('covLines').replaceChildren(); $("f_cov").value=''; $("f_carriers").value='';
   document.getElementById('vehLines').replaceChildren(); document.getElementById('drvLines').replaceChildren();
@@ -629,9 +610,9 @@ $("savePolicy").addEventListener('click', async ()=>{
   $("polErr").textContent="";
   const {coverages, carriers, err}=assembleCovData();
   if (err){$("polErr").textContent=err; return;}
-  const trailers=assembleVehicles();
-  const drivers=assembleDrivers();
   try{
+    const trailers=assembleVehicles();
+    const drivers=assembleDrivers();
     const body={ client_id:$("f_client").value.trim(), named_insured:$("f_insured").value.trim(),
       usdot:$("f_dot").value.trim()||null, status:$("f_status").value.trim(),
       effective_date:$("f_eff").value, expiration_date:$("f_exp").value,
@@ -720,26 +701,9 @@ sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.acces
 <script>
 /* Pinnacle additive: Power Units section + NHTSA VIN decoder. Non-invasive. */
 (function(){
-  window.buildPowerUnitRowNode=function(v){v=v||{};
-    var row=document.createElement('div'); row.className='pu-row';
-    row.style.cssText='display:flex;gap:6px;margin-bottom:6px;align-items:center';
-    var desc=document.createElement('input'); desc.className='pu-desc'; desc.placeholder='Year Make Model (auto)';
-    desc.value=v.description||''; desc.style.flex='2';
-    var vin=document.createElement('input'); vin.className='pu-vin'; vin.placeholder='VIN';
-    vin.value=v.vin||''; vin.style.flex='2';
-    var val=document.createElement('input'); val.className='pu-val'; val.type='number'; val.placeholder='Value';
-    val.value=v.value!=null?String(v.value):''; val.style.flex='1';
-    var decode=document.createElement('button'); decode.type='button'; decode.className='act b-ghost pu-decode';
-    decode.textContent='Decode'; decode.style.fontSize='11px';
-    var remove=document.createElement('button'); remove.type='button'; remove.className='act b-stop pu-del';
-    remove.textContent='×'; remove.style.fontSize='11px';
-    row.append(desc,vin,val,decode,remove); return row;
-  };
+  window.buildPowerUnitRowNode=function(v){return PinnacleVehicles.build(v, 'pu');};
   window.puAddRow=function(v){var c=document.getElementById('puLines'); if(c) c.appendChild(buildPowerUnitRowNode(v||{}));};
-  window.assemblePowerUnits=function(){var out=[]; document.querySelectorAll('#puLines .pu-row').forEach(function(r){
-    var d=(r.querySelector('.pu-desc')||{}).value||''; var vin=(r.querySelector('.pu-vin')||{}).value||''; var val=(r.querySelector('.pu-val')||{}).value||'';
-    d=d.trim(); vin=vin.trim(); if(d||vin) out.push({description:d, vin:vin, value: val!==''?Number(val):0});
-  }); return out;};
+  window.assemblePowerUnits=function(){return PinnacleVehicles.assemble('#puLines', 'pu');};
   function puLoad(p){var c=document.getElementById('puLines'); if(!c) return; c.replaceChildren(); ((p&&p.vehicles)||[]).forEach(function(v){puAddRow(v);});}
   async function decodeVin(vin){vin=(vin||'').trim(); if(vin.length<8) return null;
     var r=await fetch('https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/'+encodeURIComponent(vin)+'?format=json');
@@ -767,7 +731,7 @@ sb.auth.getSession().then(({data})=>{ if(data.session){ token=data.session.acces
     title.style.cssText='font-size:12px;color:#9fb3c8;margin:14px 0 4px;display:block';
     var help=document.createElement('div'); help.className='muted';
     help.style.cssText='font-size:11px;margin-bottom:6px';
-    help.textContent='Enter a VIN and click Decode (or tab out) to auto-fill Year/Make/Model via NHTSA. Prints under POWER UNITS on the ACORD 101.';
+    help.textContent='Enter a VIN and click Decode (or tab out) to auto-fill Year/Make/Model via NHTSA. Stated value and confirmed deductibles print beneath each VIN on ACORD 101. Leave unknown deductibles blank.';
     var lines=document.createElement('div'); lines.id='puLines';
     wrap.append(title,help,lines);
     var btn=document.createElement('button'); btn.type='button'; btn.className='act b-ghost'; btn.textContent='+ Add power unit'; btn.style.cssText='font-size:11px;margin-bottom:6px';

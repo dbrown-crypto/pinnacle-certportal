@@ -135,6 +135,27 @@ ever loosen the gate, revisit the auto-signature.
 
 ---
 
+## Per-vehicle physical damage deductibles
+
+The admin policy editor stores optional `comprehensive_deductible` and
+`collision_deductible` dollar amounts on each entry in `vehicles` and `trailers`.
+Enter the confirmed policy amounts for the specific VIN. Blank values are omitted;
+an explicitly entered zero is preserved. Negative, non-finite, or fractional-cent
+amounts are rejected by the API. No database migration is needed for these JSON
+schedule fields.
+
+Use **Apply to all listed vehicles** only for common amounts, then edit individual
+rows for exceptions and **Save policy**. Applying blank bulk fields leaves existing
+values unchanged. GHL policy-line sync preserves both complete schedules.
+
+ACORD 101 prints stated value and deductibles immediately below the corresponding
+VIN. A configured `ACORD101_TEMPLATE_PATH` is required when deductibles are entered.
+Schedules too long to fit are refused for manual review rather than silently clipped.
+
+Regression checks: `python -m unittest test_vehicle_deductibles test_acord25_overlay_wrap`.
+Admin editor checks: `npm install --no-save --no-package-lock jsdom`, then
+`node --test test_admin_vehicles.cjs` (no live service calls).
+
 ## The one Jenesis bridge (recommended)
 
 You can't pull from Jenesis (no open API), but you can push. In JenesisLink /
