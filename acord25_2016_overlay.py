@@ -20,6 +20,7 @@ import re
 from typing import Optional
 
 import fitz  # PyMuPDF
+from vehicle_schedule import normalize_units
 
 FONT = "helv"
 SIZE = 7.0
@@ -665,6 +666,10 @@ def fill_acord101(content, blank_101_path, description_continued=""):
     drivers = getattr(content, "drivers", []) or []
     trailers = getattr(content, "trailers", []) or []
     vehicles = getattr(content, "vehicles", []) or []
+    try:
+        vehicles, trailers = normalize_units(vehicles), normalize_units(trailers)
+    except ValueError as exc:
+        raise TextOverflowError("Correct the vehicle schedule before issuance: " + str(exc)) from exc
 
     dot_mc = "   ".join(x for x in [f"DOT# {usdot}" if usdot else "",
                                     f"MC# {mc}" if mc else ""] if x)
@@ -676,8 +681,17 @@ def fill_acord101(content, blank_101_path, description_continued=""):
             val = int(val)
         except Exception:
             val = 0
+        details = []
         if val > 0:
-            line += f"   Stated value ${_money(val)}"
+            details.append(f"Stated value ${_money(val)}")
+        for key, label in (("comprehensive_deductible", "Comp Ded"),
+                           ("collision_deductible", "Collision Ded")):
+            amount = u.get(key)
+            if amount is not None:
+                money = f"{amount:,.2f}".removesuffix(".00")
+                details.append(f"{label}: ${money}")
+        if details:
+            line += "\n        " + " | ".join(details)
         return line + "\n"
 
     # Remark text: carried description, then power units, trailers and
@@ -733,13 +747,21 @@ def fill_acord101(content, blank_101_path, description_continued=""):
         "F[0].P1[0].AdditionalRemark_FormName_A[0]": "CERTIFICATE OF LIABILITY INSURANCE",
         "F[0].P1[0].AdditionalRemark_RemarkText_A[0]": remark,
     }
-    for w in (page.widgets() or []):
+    for w in list(page.widgets() or []):
         if w.field_name in vals:
-            w.field_value = vals[w.field_name]
             if "RemarkText" in w.field_name:
-                # Fixed 8pt with normal leading instead of the auto size the
-                # viewer picks, which packed the list into tiny cramped lines.
-                w.text_fontsize = 8.0
+                # Render with measured wrapping. Refuse an oversized schedule
+                # instead of letting a fixed-size form field hide later VINs.
+                rect = fitz.Rect(w.rect) + (4, 4, -4, -4)
+                page.delete_widget(w)
+                remaining = page.insert_textbox(rect, remark, fontname=FONT,
+                                                fontsize=8.0, lineheight=1.3, color=INK)
+                if remaining < 0:
+                    raise TextOverflowError(
+                        "The ACORD 101 schedule does not fit. Shorten the schedule "
+                        "or arrange additional schedule pages before issuance.")
+                continue
+            w.field_value = vals[w.field_name]
             w.update()
     doc.bake()  # flatten the AcroForm
     return doc
@@ -756,6 +778,15 @@ def generate_trucking_cert(content, blank_25_path, blank_101_path=None,
     # description wording is the other reason to need one, so turn it on
     # rather than fail when there is somewhere to put the text.
     want_101 = bool(include_101 or carry_text)
+    has_deductibles = any(u.get(k) is not None and u.get(k) != ""
+                         for u in (getattr(content, "vehicles", []) or [])
+                         + (getattr(content, "trailers", []) or [])
+                         for k in ("comprehensive_deductible", "collision_deductible"))
+    if has_deductibles:
+        want_101 = True
+        if not blank_101_path:
+            doc25.close()
+            raise TextOverflowError("Vehicle deductibles require ACORD101_TEMPLATE_PATH.")
     if carry_text and not blank_101_path:
         doc25.close()
         raise TextOverflowError(

@@ -35,13 +35,14 @@ import jwt
 from jwt import PyJWKClient
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from gate import (
     evaluate_gate, PolicySnapshot, CertRequest, PolicyStatus, SpecialWording, GateResult,
 )
 from cert_generator import generate_certificate, CertContent
-from acord25_2016_overlay import CarrierIdentityError, _naic_for
+from acord25_2016_overlay import CarrierIdentityError, TextOverflowError, _naic_for
+from vehicle_schedule import normalize_units
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -298,6 +299,13 @@ async def issue_certificate(body: IssueRequest, authorization: Optional[str] = H
             "detail": str(exc),
         })
 
+    except TextOverflowError as exc:
+        raise HTTPException(409, detail={
+            "status": "refused",
+            "message": "The certificate schedule or wording needs manual review before issuance.",
+            "detail": str(exc),
+        })
+
     pdf_path = None
     if SUPABASE_URL and SERVICE_KEY:
         pdf_path = await storage_upload(f"{user_id}/{cert_number}.pdf", pdf)
@@ -395,6 +403,11 @@ class PolicyUpsert(BaseModel):
     trailers: list = []
     drivers: list = []
     data_current_as_of: str
+
+    @field_validator("vehicles", "trailers", mode="before")
+    @classmethod
+    def validate_vehicle_deductibles(cls, value):
+        return normalize_units(value)
 
 
 class StatusPatch(BaseModel):
